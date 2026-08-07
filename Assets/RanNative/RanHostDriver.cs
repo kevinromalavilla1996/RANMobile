@@ -321,8 +321,11 @@ public sealed class RanHostDriver : MonoBehaviour
             Touch t = Input.GetTouch(i);
             if (_barId < 0 && t.phase == TouchPhase.Began)
             {
+                //	-1 = no button. Everything ELSE is a button, including the
+                //	KEYS toggle's kMenuToggle sentinel (-2) -- `hit >= 0` here
+                //	is exactly the bug that made the toggle untappable.
                 int hit = BarHit(t.position);
-                if (hit >= 0) { _barId = t.fingerId; _barPressed = hit; }
+                if (hit != -1) { _barId = t.fingerId; _barPressed = hit; }
             }
             else if (_barId == t.fingerId &&
                      (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled))
