@@ -110,12 +110,30 @@ public sealed class RanHostDriver : MonoBehaviour
     //	joystick/camera/tap routing (same ownership rule as stick and drag).
     int       _barId = -1;         // finger owning a button press
     int       _barPressed = -1;    // which button that finger went down on
+    bool      _uiDragMode;         // long-press: finger IS the held mouse (drag & drop)
     Rect[]    _barRects;
     int[]     _barDiks;
     string[]  _barLabels;
 
     static readonly int[] kSkillDiks = { 0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B }; // DIK_1..0
     static readonly int[] kItemDiks  = { 0x10,0x11,0x12,0x1E,0x1F,0x20 };                      // Q W E A S D
+
+    //	The 17 window shortcuts (RANPARAM MenuShotcut, decode in
+    //	docs/mobile_input_map.md) behind a fold-out toggle. Order mirrors the
+    //	SHOTCUT_ enum: INVEN CHAR SKILL PARTY QUEST CLUB FRIEND MAP CHATMACRO
+    //	ITEMBANK ITEMSHOP RUN HELP PET ATTACKMODE PKMODE SUMMON.
+    static readonly int[] kMenuDiks = {
+        0x17 /*I*/, 0x2E /*C*/, 0x25 /*K*/, 0x19 /*P*/, 0x14 /*T*/, 0x22 /*G*/,
+        0x21 /*F*/, 0x32 /*M*/, 0x30 /*B*/, 0x13 /*R*/, 0x23 /*H*/, 0x26 /*L*/,
+        0x2D /*X*/, 0x2C /*Z*/, 0x16 /*U*/, 0x24 /*J*/, 0x18 /*O*/ };
+    static readonly string[] kMenuLabels = {
+        "INV","CHR","SKL","PTY","QST","CLB","FRD","MAP","MCR","BNK","SHP",
+        "RUN","HLP","PET","ATK","PK","SUM" };
+
+    const int kMenuToggle = -2;    // BarHit's answer for the KEYS button
+    bool      _menuOpen;
+    Rect      _menuToggleRect;
+    Rect[]    _menuRects;
 
     void BuildBars()
     {
@@ -152,6 +170,20 @@ public sealed class RanHostDriver : MonoBehaviour
             _barDiks[j]   = kItemDiks[i];
             _barLabels[j] = itemLbl[i];
         }
+
+        //	KEYS toggle: top-right corner, out of the compass's way. The panel
+        //	folds out beneath it, two columns.
+        float s2 = Screen.height * 0.058f;
+        _menuToggleRect = new Rect(Screen.width - s2 * 2.4f, Screen.height * 0.28f,
+                                   s2 * 2.1f, s2);
+        _menuRects = new Rect[kMenuDiks.Length];
+        for (int i = 0; i < kMenuDiks.Length; ++i)
+        {
+            int   col = i % 2, row = i / 2;
+            float mx  = Screen.width - s2 * 2.4f + col * (s2 * 1.08f);
+            float my  = _menuToggleRect.y + s2 * 1.2f + row * (s2 * 1.08f);
+            _menuRects[i] = new Rect(mx, my, s2, s2);
+        }
     }
 
     int BarHit(Vector2 touchPos)
@@ -160,6 +192,10 @@ public sealed class RanHostDriver : MonoBehaviour
         Vector2 gui = new Vector2(touchPos.x, Screen.height - touchPos.y);
         for (int i = 0; i < _barRects.Length; ++i)
             if (_barRects[i].Contains(gui)) return i;
+        if (_menuToggleRect.Contains(gui)) return kMenuToggle;
+        if (_menuOpen && _menuRects != null)
+            for (int i = 0; i < _menuRects.Length; ++i)
+                if (_menuRects[i].Contains(gui)) return _barRects.Length + i;
         return -1;
     }
 
@@ -292,7 +328,14 @@ public sealed class RanHostDriver : MonoBehaviour
                      (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled))
             {
                 if (t.phase == TouchPhase.Ended && BarHit(t.position) == _barPressed)
-                    Ran_Host_KeyTap(_barDiks[_barPressed]);
+                {
+                    if (_barPressed == kMenuToggle)
+                        _menuOpen = !_menuOpen;
+                    else if (_barPressed >= _barRects.Length)
+                        Ran_Host_KeyTap(kMenuDiks[_barPressed - _barRects.Length]);
+                    else
+                        Ran_Host_KeyTap(_barDiks[_barPressed]);
+                }
                 _barId = -1; _barPressed = -1;
             }
         }
@@ -380,8 +423,14 @@ public sealed class RanHostDriver : MonoBehaviour
                         else Ran_Host_MoveStop();          // dead zone
                     }
                 }
-                //	RIGHT half: DRAG rotates the camera; a quick short tap is
-                //	a UI click (menus and the tray live bottom-right).
+                //	RIGHT half, three outcomes by what the finger does FIRST:
+                //	  moves quickly            -> camera rotate (as before)
+                //	  short still tap          -> UI click (as before)
+                //	  stays put >= 0.35s       -> HELD MOUSE: the finger drags
+                //	    with the left button down until release. This is what
+                //	    makes drag & drop work -- items to quick slots, skills
+                //	    to the bar, windows by their title bars ("can't drag
+                //	    item to quickslot", reported on device).
                 else if (_dragId == t.fingerId ||
                          (_dragId < 0 && t.phase == TouchPhase.Began))
                 {
@@ -389,11 +438,32 @@ public sealed class RanHostDriver : MonoBehaviour
                     {
                         _dragId = t.fingerId; _dragStart = t.position;
                         _dragTime = Time.unscaledTime; _dragMoved = false;
+                        _uiDragMode = false;
                     }
+
+                    if (_uiDragMode)
+                    {
+                        //	The finger IS the mouse, button held, every frame.
+                        Rect fit = FitRect();
+                        int ex = (int)((t.position.x - fit.x) * _texW / fit.width);
+                        int ey = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
+                        Ran_SetInput(ex, ey, ended ? 0 : 1, 0, 0);
+                        if (ended) { _uiDragMode = false; _dragId = -1; }
+                        continue;
+                    }
+
                     Vector2 dp = t.deltaPosition;
                     if ((t.position - _dragStart).magnitude > 15f) _dragMoved = true;
                     if (_dragMoved && dp.sqrMagnitude > 0.25f)
                         SendLook(dp.x, -dp.y);
+
+                    //	Still and held long enough: promote to held-mouse mode.
+                    if (!_dragMoved && !ended &&
+                        Time.unscaledTime - _dragTime >= 0.35f)
+                    {
+                        _uiDragMode = true;
+                        continue;   // next frame starts pressing at the finger
+                    }
 
                     if (ended)
                     {
@@ -411,12 +481,13 @@ public sealed class RanHostDriver : MonoBehaviour
                     }
                 }
             }
-            if (_tapQueuedFrames <= 0) ReleaseMouse();
+            if (_tapQueuedFrames <= 0 && !_uiDragMode) ReleaseMouse();
         }
         else
         {
             _prevPinch = -1f;
             _dragId = -1;
+            _uiDragMode = false;
             if (_tapQueuedFrames <= 0) ReleaseMouse();
         }
 
@@ -480,6 +551,24 @@ public sealed class RanHostDriver : MonoBehaviour
                         ? new Color(1f, 1f, 0.6f, 0.95f)
                         : new Color(1f, 1f, 1f, 0.45f);
                     GUI.Box(_barRects[i], _barLabels[i], style);
+                }
+
+                //	Window-shortcut panel behind the KEYS toggle.
+                int menuFont = (int)(_menuToggleRect.height * 0.38f);
+                style.fontSize = menuFont;
+                GUI.color = _barPressed == kMenuToggle
+                    ? new Color(1f, 1f, 0.6f, 0.95f)
+                    : new Color(1f, 1f, 1f, 0.55f);
+                GUI.Box(_menuToggleRect, _menuOpen ? "KEYS ▲" : "KEYS ▼", style);
+                if (_menuOpen)
+                {
+                    for (int i = 0; i < _menuRects.Length; ++i)
+                    {
+                        GUI.color = _barPressed == _barRects.Length + i
+                            ? new Color(1f, 1f, 0.6f, 0.95f)
+                            : new Color(1f, 1f, 1f, 0.5f);
+                        GUI.Box(_menuRects[i], kMenuLabels[i], style);
+                    }
                 }
                 GUI.color = saved;
                 style.fontSize  = savedSize;
