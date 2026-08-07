@@ -69,8 +69,14 @@ public sealed class RanHostDriver : MonoBehaviour
             ? Path.Combine(Application.persistentDataPath, "RanData")
             : DataRootOverride;
 
-        _texW = RenderWidth  > 0 ? RenderWidth  : Screen.width;
-        _texH = RenderHeight > 0 ? RenderHeight : Screen.height;
+        //	0 falls back to 1024x768, NEVER to Screen.width/height. Two reasons,
+        //	both paid for on device: Screen dimensions read here race the
+        //	landscape rotation (measured: a 1080x2392 portrait engine frame on a
+        //	horizontal phone), and a component placed in a scene BEFORE the
+        //	default changed keeps its serialized 0 forever -- the script default
+        //	does not update existing scene objects.
+        _texW = RenderWidth  > 0 ? RenderWidth  : 1024;
+        _texH = RenderHeight > 0 ? RenderHeight : 768;
 
         Ran_Host_Configure(_root, _texW, _texH);
         _renderEvent = Ran_Host_GetRenderEventFunc();
