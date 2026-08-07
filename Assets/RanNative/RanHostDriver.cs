@@ -67,6 +67,7 @@ public sealed class RanHostDriver : MonoBehaviour
     bool      _configured;    // Configure deferred until landscape is REAL
     string    _root;
     float     _prevPinch = -1f;   // two-finger distance last frame; <0 = not pinching
+    float     _pinchAccum;        // pixels accumulated toward the next wheel notch
     float     _lastTapMove;       // hold-to-walk throttle (0.35s, desktop's value)
 
     void Awake()
@@ -159,8 +160,17 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             float d = Vector2.Distance(Input.GetTouch(0).position,
                                        Input.GetTouch(1).position);
+            //	QUANTIZED into real wheel notches. The camera scales the wheel
+            //	by /1000, so the first version's few-units-per-frame dribble
+            //	rounded to nothing -- pinch felt dead. Desktop delivers +/-120
+            //	per detent in one frame; every 30 px of pinch is one detent.
             if (_prevPinch > 0f)
-                Ran_Host_SetWheel((int)((d - _prevPinch) * 2f));
+            {
+                _pinchAccum += d - _prevPinch;
+                int notches = (int)(_pinchAccum / 30f);
+                if (notches != 0) _pinchAccum -= notches * 30f;
+                Ran_Host_SetWheel(notches * 120);
+            }
             _prevPinch = d;
             Ran_SetInput(0, 0, 0, 0, 0);
         }
