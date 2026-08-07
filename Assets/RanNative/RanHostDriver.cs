@@ -403,11 +403,17 @@ public sealed class RanHostDriver : MonoBehaviour
                 //	A button's finger is the button's alone.
                 if (_barId == t.fingerId) continue;
 
-                //	LEFT half = VIRTUAL JOYSTICK. Anchors where the finger
-                //	lands; camera-relative walk; release issues a real stop.
+                //	BOTTOM-LEFT ZONE = VIRTUAL JOYSTICK (was the whole left
+                //	half -- which made every window on the left side of the
+                //	screen untouchable: no clicks, no drags. The stick keeps
+                //	its anchor-where-the-thumb-lands feel inside its corner;
+                //	everywhere else gets the full click/long-press-drag/rotate
+                //	gestures, so windows can be used and dragged ANYWHERE).
                 if (_stickId == t.fingerId ||
                     (_stickId < 0 && _dragId != t.fingerId &&
-                     t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.5f))
+                     t.phase == TouchPhase.Began &&
+                     t.position.x < Screen.width * 0.42f &&
+                     t.position.y < Screen.height * 0.60f))
                 {
                     if (ended)
                     {
