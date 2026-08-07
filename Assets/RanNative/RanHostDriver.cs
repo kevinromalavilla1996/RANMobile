@@ -53,6 +53,8 @@ public sealed class RanHostDriver : MonoBehaviour
     IntPtr    _renderEvent;
     Texture2D _frameTex;      // wraps the engine's FBO colour texture
     int       _texW, _texH;
+    bool      _dataPresent;   // gate: booting without data null-derefs in CreatePC
+    string    _root;
 
     void Awake()
     {
@@ -61,22 +63,48 @@ public sealed class RanHostDriver : MonoBehaviour
         Screen.orientation = ScreenOrientation.LandscapeLeft;
         Application.targetFrameRate = 60;
 
-        string root = string.IsNullOrEmpty(DataRootOverride)
+        _root = string.IsNullOrEmpty(DataRootOverride)
             ? Path.Combine(Application.persistentDataPath, "RanData")
             : DataRootOverride;
 
         _texW = RenderWidth  > 0 ? RenderWidth  : Screen.width;
         _texH = RenderHeight > 0 ? RenderHeight : Screen.height;
 
-        Ran_Host_Configure(root, _texW, _texH);
+        Ran_Host_Configure(_root, _texW, _texH);
         _renderEvent = Ran_Host_GetRenderEventFunc();
 
-        Debug.Log($"[RanHost] data root: {root}  target {_texW}x{_texH}  " +
-                  $"data present: {Directory.Exists(Path.Combine(root, "data"))}");
+        //	Case-insensitive on purpose: the pushed client may spell it data/
+        //	or Data/, and this check must agree with the engine's resolver.
+        RefreshDataPresent();
+        Debug.Log($"[RanHost] data root: {_root}  target {_texW}x{_texH}  " +
+                  $"data present: {_dataPresent}");
+    }
+
+    void RefreshDataPresent()
+    {
+        try
+        {
+            if (!Directory.Exists(_root)) { _dataPresent = false; return; }
+            foreach (string d in Directory.GetDirectories(_root))
+                if (string.Equals(Path.GetFileName(d), "data",
+                                  StringComparison.OrdinalIgnoreCase))
+                { _dataPresent = true; return; }
+            _dataPresent = false;
+        }
+        catch { _dataPresent = false; }
     }
 
     void Update()
     {
+        //	HARD GATE. Booting without the client data reaches CreatePC with
+        //	0 maps and null-derefs (measured on device, 2026-08-07). Waiting
+        //	here also lets an adb push finish while the app sits open.
+        if (!_dataPresent)
+        {
+            if (Time.frameCount % 120 == 0) RefreshDataPresent();
+            return;
+        }
+
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
 
         //	First finger = the mouse. The engine's own UI hit-tests against
@@ -125,9 +153,11 @@ public sealed class RanHostDriver : MonoBehaviour
         }
         else
         {
-            GUI.Label(new Rect(20, 20, 800, 40),
-                Ran_Host_IsBooted() == 1 ? "RAN: waiting for frame texture..."
-                                         : "RAN: booting (first frames load the world)...");
+            string msg = !_dataPresent
+                ? $"RAN: game data NOT FOUND at\n{_root}\nadb push the client, the app re-checks every ~2s"
+                : Ran_Host_IsBooted() == 1 ? "RAN: waiting for frame texture..."
+                                           : "RAN: booting (first frames load the world)...";
+            GUI.Label(new Rect(20, 20, 1000, 120), msg);
         }
     }
 #else
