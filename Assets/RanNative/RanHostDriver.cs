@@ -185,9 +185,22 @@ public sealed class RanHostDriver : MonoBehaviour
 
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
 
+        //	FINGER OWNERSHIP FIRST. The joystick finger stays the joystick and
+        //	a second finger stays the camera drag -- "moving plus drag turned
+        //	into zoom" (reported) because a raw touchCount>=2 check treated
+        //	the stick+drag pair as a pinch. Pinch now requires BOTH fingers
+        //	to be unowned.
+        bool stickOwned = false, dragOwned = false;
+        for (int i = 0; i < Input.touchCount; ++i)
+        {
+            int id = Input.GetTouch(i).fingerId;
+            if (id == _stickId) stickOwned = true;
+            if (id == _dragId)  dragOwned  = true;
+        }
+
         //	TWO fingers: pinch = zoom, shared drag = look ("Shift view" on PC).
         //	The mouse is released so the fingers never read as clicks.
-        if (Input.touchCount >= 2)
+        if (Input.touchCount >= 2 && !stickOwned && !dragOwned)
         {
             Touch a = Input.GetTouch(0), b = Input.GetTouch(1);
             float   d = Vector2.Distance(a.position, b.position);
@@ -220,49 +233,52 @@ public sealed class RanHostDriver : MonoBehaviour
             _dragId = -1;
             ReleaseMouse();
         }
-        else if (Input.touchCount == 1)
+        else if (Input.touchCount >= 1)
         {
             _prevPinch = -1f;
-            Touch t = Input.GetTouch(0);
-            bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
 
-            //	LEFT half = VIRTUAL JOYSTICK (restored on request -- "when I'm
-            //	controlling it in the center, the player moves the way I want").
-            //	Anchors where the finger lands; camera-relative walk via the
-            //	native path; release issues a real stop.
-            if (_stickId == t.fingerId ||
-                (_stickId < 0 && _dragId != t.fingerId &&
-                 t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.5f))
+            //	PER-TOUCH, not per-count: joystick and camera drag must work
+            //	SIMULTANEOUSLY (move while looking), so each finger is routed
+            //	by ownership -- stick finger to the stick, drag finger (or a
+            //	new right-half finger) to the camera.
+            for (int i = 0; i < Input.touchCount; ++i)
             {
-                if (ended)
+                Touch t = Input.GetTouch(i);
+                bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
+
+                //	LEFT half = VIRTUAL JOYSTICK. Anchors where the finger
+                //	lands; camera-relative walk; release issues a real stop.
+                if (_stickId == t.fingerId ||
+                    (_stickId < 0 && _dragId != t.fingerId &&
+                     t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.5f))
                 {
-                    if (_stickId >= 0) Ran_Host_MoveStop();
-                    _stickId = -1; _stickVec = Vector2.zero;
-                }
-                else
-                {
-                    if (_stickId < 0) { _stickId = t.fingerId; _stickAnchor = t.position; }
-                    _stickVec = t.position - _stickAnchor;
-                    if (_stickVec.magnitude > 20f)
+                    if (ended)
                     {
-                        Vector2 n = _stickVec.normalized;
-                        Ran_Host_MoveDir(n.x, n.y);   // Unity y-up == forward
+                        if (_stickId >= 0) Ran_Host_MoveStop();
+                        _stickId = -1; _stickVec = Vector2.zero;
                     }
-                    else Ran_Host_MoveStop();          // dead zone
+                    else
+                    {
+                        if (_stickId < 0) { _stickId = t.fingerId; _stickAnchor = t.position; }
+                        _stickVec = t.position - _stickAnchor;
+                        if (_stickVec.magnitude > 20f)
+                        {
+                            Vector2 n = _stickVec.normalized;
+                            Ran_Host_MoveDir(n.x, n.y);   // Unity y-up == forward
+                        }
+                        else Ran_Host_MoveStop();          // dead zone
+                    }
                 }
-                ReleaseMouse();
-            }
-            //	RIGHT half: DRAG rotates the camera; a quick short tap is a
-            //	UI click (menus and the tray live bottom-right).
-            else
-            {
-                if (t.phase == TouchPhase.Began)
+                //	RIGHT half: DRAG rotates the camera; a quick short tap is
+                //	a UI click (menus and the tray live bottom-right).
+                else if (_dragId == t.fingerId ||
+                         (_dragId < 0 && t.phase == TouchPhase.Began))
                 {
-                    _dragId = t.fingerId; _dragStart = t.position;
-                    _dragTime = Time.unscaledTime; _dragMoved = false;
-                }
-                if (_dragId == t.fingerId)
-                {
+                    if (t.phase == TouchPhase.Began)
+                    {
+                        _dragId = t.fingerId; _dragStart = t.position;
+                        _dragTime = Time.unscaledTime; _dragMoved = false;
+                    }
                     Vector2 dp = t.deltaPosition;
                     if ((t.position - _dragStart).magnitude > 15f) _dragMoved = true;
                     if (_dragMoved && dp.sqrMagnitude > 0.25f)
@@ -283,8 +299,8 @@ public sealed class RanHostDriver : MonoBehaviour
                         _dragId = -1;
                     }
                 }
-                if (_tapQueuedFrames <= 0) ReleaseMouse();
             }
+            if (_tapQueuedFrames <= 0) ReleaseMouse();
         }
         else
         {
