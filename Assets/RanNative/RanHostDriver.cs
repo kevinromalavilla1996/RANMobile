@@ -82,8 +82,11 @@ public sealed class RanHostDriver : MonoBehaviour
     string    _root;
     float     _prevPinch = -1f;   // two-finger distance last frame; <0 = not pinching
     Vector2   _prevCentroid;      // two-finger centroid last frame (for look)
-    int       _mouseId = -1;      // finger owning the mouse (left half)
+    int       _mouseId = -1;      // finger owning the mouse
     int       _dragId = -1;       // finger owning the camera drag (right half)
+    int       _stickId = -1;      // finger owning the joystick (left half)
+    Vector2   _stickAnchor;
+    Vector2   _stickVec;
     Vector2   _dragStart;
     float     _dragTime;
     bool      _dragMoved;
@@ -133,6 +136,14 @@ public sealed class RanHostDriver : MonoBehaviour
         Debug.Log($"[RanHost] data root: {_root}  engine {_texW}x{_texH}  " +
                   $"screen {Screen.width}x{Screen.height}  data present: {_dataPresent}");
         _configured = true;
+    }
+
+    //	Release the mouse WITHOUT parking it at (0,0): that corner sits on the
+    //	HP bar, and hovering UI has engine side effects (cursor type, camera
+    //	handling). Neutral = lower-centre of the frame, over open ground.
+    void ReleaseMouse()
+    {
+        Ran_SetInput(_texW / 2, _texH * 2 / 3, 0, 0, 0);
     }
 
     //	The largest rect with the engine frame's aspect that fits the screen,
@@ -207,7 +218,7 @@ public sealed class RanHostDriver : MonoBehaviour
             _prevPinch = d;
             _prevCentroid = c;
             _dragId = -1;
-            Ran_SetInput(0, 0, 0, 0, 0);
+            ReleaseMouse();
         }
         else if (Input.touchCount == 1)
         {
@@ -215,19 +226,31 @@ public sealed class RanHostDriver : MonoBehaviour
             Touch t = Input.GetTouch(0);
             bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
 
-            //	LEFT half = the mouse: the engine's own click-to-move (now
-            //	that the pick reads the finger, tap-and-drag steers like a
-            //	joystick by itself -- user-confirmed) plus left-side UI.
-            if (_dragId != t.fingerId &&
-                (t.position.x < Screen.width * 0.5f || _mouseId == t.fingerId))
+            //	LEFT half = VIRTUAL JOYSTICK (restored on request -- "when I'm
+            //	controlling it in the center, the player moves the way I want").
+            //	Anchors where the finger lands; camera-relative walk via the
+            //	native path; release issues a real stop.
+            if (_stickId == t.fingerId ||
+                (_stickId < 0 && _dragId != t.fingerId &&
+                 t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.5f))
             {
-                _mouseId = ended ? -1 : t.fingerId;
-                Rect fit = FitRect();
-                int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
-                //	TOP-LEFT origin: the ground pick (GetMouseTargetPosWnd:1149)
-                //	flips Y itself, so it expects top-left input.
-                int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
-                Ran_SetInput(mx, my, ended ? 0 : 1, 0, 0);
+                if (ended)
+                {
+                    if (_stickId >= 0) Ran_Host_MoveStop();
+                    _stickId = -1; _stickVec = Vector2.zero;
+                }
+                else
+                {
+                    if (_stickId < 0) { _stickId = t.fingerId; _stickAnchor = t.position; }
+                    _stickVec = t.position - _stickAnchor;
+                    if (_stickVec.magnitude > 20f)
+                    {
+                        Vector2 n = _stickVec.normalized;
+                        Ran_Host_MoveDir(n.x, n.y);   // Unity y-up == forward
+                    }
+                    else Ran_Host_MoveStop();          // dead zone
+                }
+                ReleaseMouse();
             }
             //	RIGHT half: DRAG rotates the camera; a quick short tap is a
             //	UI click (menus and the tray live bottom-right).
@@ -260,14 +283,14 @@ public sealed class RanHostDriver : MonoBehaviour
                         _dragId = -1;
                     }
                 }
-                if (_tapQueuedFrames <= 0) Ran_SetInput(0, 0, 0, 0, 0);
+                if (_tapQueuedFrames <= 0) ReleaseMouse();
             }
         }
         else
         {
             _prevPinch = -1f;
             _dragId = -1;
-            if (_tapQueuedFrames <= 0) Ran_SetInput(0, 0, 0, 0, 0);
+            if (_tapQueuedFrames <= 0) ReleaseMouse();
         }
 
         //	Deliver a queued right-side tap: one held frame, one release frame.
