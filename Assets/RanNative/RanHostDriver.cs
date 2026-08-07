@@ -31,11 +31,12 @@ public sealed class RanHostDriver : MonoBehaviour
     [Tooltip("Game-data root. Empty = <persistentDataPath>/RanData")]
     public string DataRootOverride = "";
 
-    [Tooltip("Engine render size. Default 1024x768: the resolution this UI was " +
-             "authored for and the one the desktop test rig verifies. The blit " +
-             "letterboxes to preserve it. 0 = screen size (stretches the UI).")]
-    public int RenderWidth = 1024;
-    public int RenderHeight = 768;
+    [Tooltip("Engine render size. 0 = the full landscape screen resolution " +
+             "(fills the display; RAN's UI anchors its panels to the frame " +
+             "edges, so widescreen works like the PC widescreen clients). " +
+             "Set e.g. 1024x768 to letterbox the classic 4:3 layout instead.")]
+    public int RenderWidth = 0;
+    public int RenderHeight = 0;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
@@ -56,6 +57,7 @@ public sealed class RanHostDriver : MonoBehaviour
     Texture2D _frameTex;      // wraps the engine's FBO colour texture
     int       _texW, _texH;
     bool      _dataPresent;   // gate: booting without data null-derefs in CreatePC
+    bool      _configured;    // Configure deferred until landscape is REAL
     string    _root;
 
     void Awake()
@@ -69,14 +71,27 @@ public sealed class RanHostDriver : MonoBehaviour
             ? Path.Combine(Application.persistentDataPath, "RanData")
             : DataRootOverride;
 
-        //	0 falls back to 1024x768, NEVER to Screen.width/height. Two reasons,
-        //	both paid for on device: Screen dimensions read here race the
-        //	landscape rotation (measured: a 1080x2392 portrait engine frame on a
-        //	horizontal phone), and a component placed in a scene BEFORE the
-        //	default changed keeps its serialized 0 forever -- the script default
-        //	does not update existing scene objects.
-        _texW = RenderWidth  > 0 ? RenderWidth  : 1024;
-        _texH = RenderHeight > 0 ? RenderHeight : 768;
+        //	NO sizing here. Screen.width read in Awake races the orientation
+        //	request above -- the first device build measured 1080x2392 and
+        //	booted a portrait engine frame onto a horizontal phone. Configure
+        //	runs from Update once the landscape dimensions are real.
+    }
+
+    void ConfigureOnce()
+    {
+        if (_configured) return;
+        //	Explicit size: take it now. Screen size: wait for landscape.
+        if (RenderWidth <= 0 || RenderHeight <= 0)
+        {
+            if (Screen.width <= Screen.height) return;   // rotation not applied yet
+            _texW = Screen.width;
+            _texH = Screen.height;
+        }
+        else
+        {
+            _texW = RenderWidth;
+            _texH = RenderHeight;
+        }
 
         Ran_Host_Configure(_root, _texW, _texH);
         _renderEvent = Ran_Host_GetRenderEventFunc();
@@ -84,8 +99,9 @@ public sealed class RanHostDriver : MonoBehaviour
         //	Case-insensitive on purpose: the pushed client may spell it data/
         //	or Data/, and this check must agree with the engine's resolver.
         RefreshDataPresent();
-        Debug.Log($"[RanHost] data root: {_root}  target {_texW}x{_texH}  " +
-                  $"data present: {_dataPresent}");
+        Debug.Log($"[RanHost] data root: {_root}  engine {_texW}x{_texH}  " +
+                  $"screen {Screen.width}x{Screen.height}  data present: {_dataPresent}");
+        _configured = true;
     }
 
     //	The largest rect with the engine frame's aspect that fits the screen,
@@ -113,6 +129,9 @@ public sealed class RanHostDriver : MonoBehaviour
 
     void Update()
     {
+        ConfigureOnce();
+        if (!_configured) return;   // still waiting for landscape dimensions
+
         //	HARD GATE. Booting without the client data reaches CreatePC with
         //	0 maps and null-derefs (measured on device, 2026-08-07). Waiting
         //	here also lets an adb push finish while the app sits open.
@@ -179,7 +198,9 @@ public sealed class RanHostDriver : MonoBehaviour
         }
         else
         {
-            string msg = !_dataPresent
+            string msg = !_configured
+                ? "RAN: waiting for landscape orientation..."
+                : !_dataPresent
                 ? $"RAN: game data NOT FOUND at\n{_root}\nadb push the client, the app re-checks every ~2s"
                 : Ran_Host_IsBooted() == 1 ? "RAN: waiting for frame texture..."
                                            : "RAN: booting (first frames load the world)...";
