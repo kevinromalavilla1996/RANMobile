@@ -31,12 +31,16 @@ public sealed class RanHostDriver : MonoBehaviour
     [Tooltip("Game-data root. Empty = <persistentDataPath>/RanData")]
     public string DataRootOverride = "";
 
-    [Tooltip("Engine render size. 0 = the full landscape screen resolution " +
-             "(fills the display; RAN's UI anchors its panels to the frame " +
-             "edges, so widescreen works like the PC widescreen clients). " +
-             "Set e.g. 1024x768 to letterbox the classic 4:3 layout instead.")]
+    [Tooltip("Engine render size. 0 = screen resolution scaled by " +
+             "RenderScalePercent. Set e.g. 1024x768 to letterbox 4:3 instead.")]
     public int RenderWidth = 0;
     public int RenderHeight = 0;
+
+    [Tooltip("When RenderWidth is 0: percent of screen resolution the engine " +
+             "renders at (the blit upscales to fill). 75 cuts pixel cost ~45% " +
+             "for mild softening. 0 falls back to 75 -- components already " +
+             "placed in a scene keep serialized 0 when this field is added.")]
+    public int RenderScalePercent = 75;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
@@ -94,8 +98,9 @@ public sealed class RanHostDriver : MonoBehaviour
         if (RenderWidth <= 0 || RenderHeight <= 0)
         {
             if (Screen.width <= Screen.height) return;   // rotation not applied yet
-            _texW = Screen.width;
-            _texH = Screen.height;
+            int pct = RenderScalePercent > 0 ? RenderScalePercent : 75;
+            _texW = Mathf.Max(640, Screen.width  * pct / 100);
+            _texH = Mathf.Max(360, Screen.height * pct / 100);
         }
         else
         {
