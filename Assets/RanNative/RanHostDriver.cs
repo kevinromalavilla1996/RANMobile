@@ -42,6 +42,10 @@ public sealed class RanHostDriver : MonoBehaviour
              "placed in a scene keep serialized 0 when this field is added.")]
     public int RenderScalePercent = 75;
 
+    [Tooltip("Camera drag sensitivity, percent. 100 = raw pixels (too fast " +
+             "per user test). 0 falls back to 40 (serialized-0 trap).")]
+    public int LookSensitivityPercent = 40;
+
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
 
@@ -138,6 +142,19 @@ public sealed class RanHostDriver : MonoBehaviour
         _configured = true;
     }
 
+    //	Scaled look with FLOAT accumulation: at 40% a 2px drag is 0.8px --
+    //	truncating per-frame would eat slow drags entirely, so fractions
+    //	carry over between frames.
+    float _lookAccX, _lookAccY;
+    void SendLook(float dx, float dy)
+    {
+        int pct = LookSensitivityPercent > 0 ? LookSensitivityPercent : 40;
+        _lookAccX += dx * pct / 100f;
+        _lookAccY += dy * pct / 100f;
+        int ix = (int)_lookAccX, iy = (int)_lookAccY;
+        if (ix != 0 || iy != 0) { Ran_Host_Look(ix, iy); _lookAccX -= ix; _lookAccY -= iy; }
+    }
+
     //	Release the mouse WITHOUT parking it at (0,0): that corner sits on the
     //	HP bar, and hovering UI has engine side effects (cursor type, camera
     //	handling). Neutral = lower-centre of the frame, over open ground.
@@ -225,7 +242,7 @@ public sealed class RanHostDriver : MonoBehaviour
                 {
                     //	Unity Y is up-positive; the engine's look wants
                     //	screen-down-positive dy.
-                    Ran_Host_Look((int)cd.x, (int)-cd.y);
+                    SendLook(cd.x, -cd.y);
                 }
             }
             _prevPinch = d;
@@ -282,7 +299,7 @@ public sealed class RanHostDriver : MonoBehaviour
                     Vector2 dp = t.deltaPosition;
                     if ((t.position - _dragStart).magnitude > 15f) _dragMoved = true;
                     if (_dragMoved && dp.sqrMagnitude > 0.25f)
-                        Ran_Host_Look((int)dp.x, (int)-dp.y);
+                        SendLook(dp.x, -dp.y);
 
                     if (ended)
                     {
