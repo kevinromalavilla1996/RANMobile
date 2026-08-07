@@ -144,11 +144,16 @@ public sealed class RanHostDriver : MonoBehaviour
     void OnGUI()
     {
         //	Deliberately crude: the ugly-boot milestone needs pixels on screen,
-        //	not a UI. GL renders bottom-up, so the rect is V-flipped.
+        //	not a UI.
+        //
+        //	NO V-flip. The first assumption ("GL renders the FBO bottom-up, so
+        //	pre-flip the rect") put the whole world on its head on device --
+        //	Unity already accounts for the GL texture convention when IMGUI
+        //	samples an external texture, so compensating twice IS the flip.
         if (_frameTex != null)
         {
             GUI.DrawTexture(
-                new Rect(0, Screen.height, Screen.width, -Screen.height),
+                new Rect(0, 0, Screen.width, Screen.height),
                 _frameTex, ScaleMode.StretchToFill, false);
         }
         else
