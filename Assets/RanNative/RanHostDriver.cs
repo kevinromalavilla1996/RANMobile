@@ -63,6 +63,15 @@ public sealed class RanHostDriver : MonoBehaviour
     //	drives the camera's zoom directly.
     [DllImport(LIB)] static extern void   Ran_Host_Zoom(int pixels);
 
+    //	Virtual joystick: normalized direction, y up = away from camera.
+    //	Native runs the desktop-verified camera-relative walk with its own
+    //	reissue rule.
+    [DllImport(LIB)] static extern void   Ran_Host_MoveDir(float dirX, float dirY);
+    [DllImport(LIB)] static extern void   Ran_Host_MoveStop();
+
+    //	Two-finger camera look, drag pixel deltas.
+    [DllImport(LIB)] static extern void   Ran_Host_Look(int dx, int dy);
+
     const int kEventFrame = 1;
 
     IntPtr    _renderEvent;
@@ -72,8 +81,10 @@ public sealed class RanHostDriver : MonoBehaviour
     bool      _configured;    // Configure deferred until landscape is REAL
     string    _root;
     float     _prevPinch = -1f;   // two-finger distance last frame; <0 = not pinching
-    float     _pinchAccum;        // pixels accumulated toward the next wheel notch
-    float     _lastTapMove;       // hold-to-walk throttle (0.35s, desktop's value)
+    Vector2   _prevCentroid;      // two-finger centroid last frame (for look)
+    int       _stickId = -1;      // fingerId anchoring the joystick; -1 = none
+    Vector2   _stickAnchor;       // screen position where the stick finger landed
+    Vector2   _stickVec;          // current stick vector (for the on-screen hint)
 
     void Awake()
     {
@@ -120,6 +131,13 @@ public sealed class RanHostDriver : MonoBehaviour
         _configured = true;
     }
 
+    void ReleaseStick()
+    {
+        if (_stickId >= 0) Ran_Host_MoveStop();
+        _stickId = -1;
+        _stickVec = Vector2.zero;
+    }
+
     //	The largest rect with the engine frame's aspect that fits the screen,
     //	centred. Shared by the blit and the touch mapping so they always agree.
     Rect FitRect()
@@ -159,55 +177,73 @@ public sealed class RanHostDriver : MonoBehaviour
 
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
 
-        //	TWO fingers: pinch zoom, delivered as wheel delta. The mouse is
-        //	released during a pinch so the second finger landing does not
-        //	read as a click.
+        //	TWO fingers: pinch = zoom, shared drag = look ("Shift view" on PC).
+        //	The mouse is released so the fingers never read as clicks.
         if (Input.touchCount >= 2)
         {
-            float d = Vector2.Distance(Input.GetTouch(0).position,
-                                       Input.GetTouch(1).position);
-            //	Raw pixel delta; the native side applies it straight to the
-            //	camera (the wheel/damper route measurably cannot move the
-            //	server-clamped follow camera).
+            Touch a = Input.GetTouch(0), b = Input.GetTouch(1);
+            float   d = Vector2.Distance(a.position, b.position);
+            Vector2 c = (a.position + b.position) * 0.5f;
+
             if (_prevPinch > 0f)
             {
                 int px = (int)(d - _prevPinch);
                 if (px != 0) Ran_Host_Zoom(px);
+
+                //	Centroid drag rotates the camera. Unity Y is up-positive;
+                //	the engine's look expects screen-down-positive dy.
+                Vector2 cd = c - _prevCentroid;
+                if (cd.sqrMagnitude > 0.25f)
+                    Ran_Host_Look((int)cd.x, (int)-cd.y);
             }
             _prevPinch = d;
+            _prevCentroid = c;
+            ReleaseStick();
             Ran_SetInput(0, 0, 0, 0, 0);
         }
-        //	ONE finger = the mouse, mapped through the SAME letterbox rect the
-        //	blit uses -- a touch must land on the engine pixel it appears over.
-        //	Holding the finger also WALKS toward it, reissued on the same
-        //	throttle the desktop walk keys use (ActionMoveTo restarts the walk;
-        //	per-frame reissue freezes the animation on its first pose).
         else if (Input.touchCount == 1)
         {
             _prevPinch = -1f;
-
             Touch t = Input.GetTouch(0);
-            Rect fit = FitRect();
-            int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
-            //	TOP-LEFT origin, verified against the engine: the ground pick
-            //	(GetMouseTargetPosWnd:1149) flips Y itself, so it EXPECTS
-            //	top-left input -- the bottom-origin experiment double-flipped
-            //	it. Unity touch origin is bottom-left; converted here.
-            int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
-            bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
-            Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
 
-            //	NO synthetic TapMove here any more. Once input actually reached
-            //	the engine (the activeInputHandler fix), its OWN click-to-move
-            //	fires on the tap -- and the 0.35s TapMove reissue then fought
-            //	it, walking left-right-left between two destinations (measured
-            //	on device). The engine's native path is the single authority:
-            //	tap ground, character walks to that exact spot, like the PC
-            //	client. Ran_Host_TapMove stays exported as a fallback.
+            //	LEFT 40% of the screen = VIRTUAL JOYSTICK. Anchors where the
+            //	finger lands; direction+hold walks, camera-relative, via the
+            //	desktop-verified native path. Never sends mouse events.
+            bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
+            if (_stickId == t.fingerId || (_stickId < 0 && !ended &&
+                t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.4f))
+            {
+                if (ended) { ReleaseStick(); }
+                else
+                {
+                    if (_stickId < 0) { _stickId = t.fingerId; _stickAnchor = t.position; }
+                    _stickVec = t.position - _stickAnchor;
+                    if (_stickVec.magnitude > 20f)
+                    {
+                        Vector2 n = _stickVec.normalized;
+                        Ran_Host_MoveDir(n.x, n.y);   // Unity y-up == forward
+                    }
+                    else Ran_Host_MoveStop();         // inside dead zone
+                }
+                Ran_SetInput(0, 0, 0, 0, 0);
+            }
+            //	RIGHT side = the mouse: UI clicks and the engine's own
+            //	click-to-move, mapped through the blit's letterbox rect.
+            else
+            {
+                Rect fit = FitRect();
+                int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
+                //	TOP-LEFT origin: the ground pick (GetMouseTargetPosWnd:1149)
+                //	flips Y itself, so it expects top-left input.
+                int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
+                bool held = !ended;
+                Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
+            }
         }
         else
         {
             _prevPinch = -1f;
+            ReleaseStick();
             Ran_SetInput(0, 0, 0, 0, 0);
         }
 
@@ -245,6 +281,16 @@ public sealed class RanHostDriver : MonoBehaviour
         if (_frameTex != null)
         {
             GUI.DrawTexture(FitRect(), _frameTex, ScaleMode.StretchToFill, false);
+
+            //	Joystick hint: anchor ring + current stick position. IMGUI
+            //	boxes are crude but zero-asset; replaced with real UI later.
+            if (_stickId >= 0)
+            {
+                Vector2 a = new Vector2(_stickAnchor.x, Screen.height - _stickAnchor.y);
+                Vector2 p = a + new Vector2(_stickVec.x, -_stickVec.y);
+                GUI.Box(new Rect(a.x - 60, a.y - 60, 120, 120), "");
+                GUI.Box(new Rect(p.x - 25, p.y - 25, 50, 50), "");
+            }
         }
         else
         {
