@@ -31,9 +31,11 @@ public sealed class RanHostDriver : MonoBehaviour
     [Tooltip("Game-data root. Empty = <persistentDataPath>/RanData")]
     public string DataRootOverride = "";
 
-    [Tooltip("Engine render size. 0 = screen size at startup.")]
-    public int RenderWidth = 0;
-    public int RenderHeight = 0;
+    [Tooltip("Engine render size. Default 1024x768: the resolution this UI was " +
+             "authored for and the one the desktop test rig verifies. The blit " +
+             "letterboxes to preserve it. 0 = screen size (stretches the UI).")]
+    public int RenderWidth = 1024;
+    public int RenderHeight = 768;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
@@ -80,6 +82,15 @@ public sealed class RanHostDriver : MonoBehaviour
                   $"data present: {_dataPresent}");
     }
 
+    //	The largest rect with the engine frame's aspect that fits the screen,
+    //	centred. Shared by the blit and the touch mapping so they always agree.
+    Rect FitRect()
+    {
+        float scale = Mathf.Min((float)Screen.width / _texW, (float)Screen.height / _texH);
+        float w = _texW * scale, h = _texH * scale;
+        return new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+    }
+
     void RefreshDataPresent()
     {
         try
@@ -107,14 +118,16 @@ public sealed class RanHostDriver : MonoBehaviour
 
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
 
-        //	First finger = the mouse. The engine's own UI hit-tests against
-        //	this, so coordinates are scaled from screen to the engine's frame.
+        //	First finger = the mouse, mapped through the SAME letterbox rect
+        //	the blit uses -- a touch on the frame must land on the engine
+        //	pixel it appears over, or every button press is offset.
         if (Input.touchCount > 0)
         {
             Touch t = Input.GetTouch(0);
-            int mx = (int)(t.position.x * _texW / Screen.width);
+            Rect fit = FitRect();
+            int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
             //	Unity touch origin is bottom-left; the engine is top-left.
-            int my = (int)((Screen.height - t.position.y) * _texH / Screen.height);
+            int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
             bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
             Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
         }
@@ -150,11 +163,13 @@ public sealed class RanHostDriver : MonoBehaviour
         //	pre-flip the rect") put the whole world on its head on device --
         //	Unity already accounts for the GL texture convention when IMGUI
         //	samples an external texture, so compensating twice IS the flip.
+        //
+        //	LETTERBOXED, not stretched: the engine renders the 4:3 frame this
+        //	UI was authored for; pillarbox bars on a 20:9 panel beat a UI
+        //	whose buttons are twice as wide as they are tall.
         if (_frameTex != null)
         {
-            GUI.DrawTexture(
-                new Rect(0, 0, Screen.width, Screen.height),
-                _frameTex, ScaleMode.StretchToFill, false);
+            GUI.DrawTexture(FitRect(), _frameTex, ScaleMode.StretchToFill, false);
         }
         else
         {
