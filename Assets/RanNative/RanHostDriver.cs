@@ -59,8 +59,9 @@ public sealed class RanHostDriver : MonoBehaviour
     //	ActionMoveTo -- pathing, server message, walk animation included.
     [DllImport(LIB)] static extern void   Ran_Host_TapMove(float engineX, float engineY);
 
-    //	Pinch zoom as mouse wheel (WHEEL_DELTA units, 120 per notch).
-    [DllImport(LIB)] static extern void   Ran_Host_SetWheel(int delta);
+    //	Pinch zoom, raw pixels (positive = fingers apart); the native side
+    //	drives the camera's zoom directly.
+    [DllImport(LIB)] static extern void   Ran_Host_Zoom(int pixels);
 
     const int kEventFrame = 1;
 
@@ -165,16 +166,13 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             float d = Vector2.Distance(Input.GetTouch(0).position,
                                        Input.GetTouch(1).position);
-            //	QUANTIZED into real wheel notches. The camera scales the wheel
-            //	by /1000, so the first version's few-units-per-frame dribble
-            //	rounded to nothing -- pinch felt dead. Desktop delivers +/-120
-            //	per detent in one frame; every 30 px of pinch is one detent.
+            //	Raw pixel delta; the native side applies it straight to the
+            //	camera (the wheel/damper route measurably cannot move the
+            //	server-clamped follow camera).
             if (_prevPinch > 0f)
             {
-                _pinchAccum += d - _prevPinch;
-                int notches = (int)(_pinchAccum / 30f);
-                if (notches != 0) _pinchAccum -= notches * 30f;
-                Ran_Host_SetWheel(notches * 120);
+                int px = (int)(d - _prevPinch);
+                if (px != 0) Ran_Host_Zoom(px);
             }
             _prevPinch = d;
             Ran_SetInput(0, 0, 0, 0, 0);
@@ -187,20 +185,15 @@ public sealed class RanHostDriver : MonoBehaviour
         else if (Input.touchCount == 1)
         {
             _prevPinch = -1f;
-            Ran_Host_SetWheel(0);
 
             Touch t = Input.GetTouch(0);
             Rect fit = FitRect();
             int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
-            //	EXPERIMENT (device evidence: taps beside the character walk
-            //	far away): engine-Y sent BOTTOM-origin instead of top. The
-            //	desktop WINDOW gets a vertical flip at present time that the
-            //	FBO path does not, so the ground-pick's ray may expect the
-            //	mirrored Y here. If picks land accurately with this and UI
-            //	buttons still respond in place, the flip is correct for the
-            //	FBO host; if UI breaks while picks fix, the flip belongs in
-            //	the pick path only (engine-side).
-            int my = (int)((t.position.y - fit.y) * _texH / fit.height);
+            //	TOP-LEFT origin, verified against the engine: the ground pick
+            //	(GetMouseTargetPosWnd:1149) flips Y itself, so it EXPECTS
+            //	top-left input -- the bottom-origin experiment double-flipped
+            //	it. Unity touch origin is bottom-left; converted here.
+            int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
             bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
             Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
 
@@ -215,7 +208,6 @@ public sealed class RanHostDriver : MonoBehaviour
         else
         {
             _prevPinch = -1f;
-            Ran_Host_SetWheel(0);
             Ran_SetInput(0, 0, 0, 0, 0);
         }
 
