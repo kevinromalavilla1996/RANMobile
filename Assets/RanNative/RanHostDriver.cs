@@ -37,10 +37,11 @@ public sealed class RanHostDriver : MonoBehaviour
     public int RenderHeight = 0;
 
     [Tooltip("When RenderWidth is 0: percent of screen resolution the engine " +
-             "renders at (the blit upscales to fill). 75 cuts pixel cost ~45% " +
-             "for mild softening. 0 falls back to 75 -- components already " +
-             "placed in a scene keep serialized 0 when this field is added.")]
-    public int RenderScalePercent = 75;
+             "renders at (the blit upscales to fill). 100 = native. The upload " +
+             "war made 100 affordable (render was 6ms at 75). 0 falls back to " +
+             "100 -- scene components keep their serialized 0 from before this " +
+             "field existed.")]
+    public int RenderScalePercent = 100;
 
     [Tooltip("Camera drag sensitivity, percent. 100 = raw pixels (too fast " +
              "per user test). 0 falls back to 40 (serialized-0 trap).")]
@@ -121,7 +122,10 @@ public sealed class RanHostDriver : MonoBehaviour
         if (RenderWidth <= 0 || RenderHeight <= 0)
         {
             if (Screen.width <= Screen.height) return;   // rotation not applied yet
-            int pct = RenderScalePercent > 0 ? RenderScalePercent : 75;
+            //	Fallback 100, not 75: the scene's component serialized 0 before
+            //	this field existed, so THIS line -- not the script default --
+            //	decides the real resolution.
+            int pct = RenderScalePercent > 0 ? RenderScalePercent : 100;
             _texW = Mathf.Max(640, Screen.width  * pct / 100);
             _texH = Mathf.Max(360, Screen.height * pct / 100);
         }
