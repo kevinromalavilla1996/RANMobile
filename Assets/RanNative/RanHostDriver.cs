@@ -192,8 +192,15 @@ public sealed class RanHostDriver : MonoBehaviour
             Touch t = Input.GetTouch(0);
             Rect fit = FitRect();
             int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
-            //	Unity touch origin is bottom-left; the engine is top-left.
-            int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
+            //	EXPERIMENT (device evidence: taps beside the character walk
+            //	far away): engine-Y sent BOTTOM-origin instead of top. The
+            //	desktop WINDOW gets a vertical flip at present time that the
+            //	FBO path does not, so the ground-pick's ray may expect the
+            //	mirrored Y here. If picks land accurately with this and UI
+            //	buttons still respond in place, the flip is correct for the
+            //	FBO host; if UI breaks while picks fix, the flip belongs in
+            //	the pick path only (engine-side).
+            int my = (int)((t.position.y - fit.y) * _texH / fit.height);
             bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
             Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
 
