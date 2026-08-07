@@ -389,3 +389,9 @@ crashlytics-build.properties
 # rebuilt from RANOnlinePHRepository/_Port_ARM64 (cmake --build build-android)
 # and copied here. The .meta IS committed so Unity import settings persist.
 Assets/Plugins/Android/libs/arm64-v8a/libranclient.so
+
+# The VS template above ignores [Pp]ackages/* for NuGet. Unity's /Packages
+# (manifest.json + packages-lock.json) is NOT NuGet and MUST be tracked or
+# the project cannot restore URP and friends.
+!/[Pp]ackages/
+!/[Pp]ackages/**
