@@ -51,6 +51,13 @@ public sealed class RanHostDriver : MonoBehaviour
     //	DOWN/PRESSED/UP edges the engine's state machine expects.
     [DllImport(LIB)] static extern void   Ran_SetInput(int mouseX, int mouseY, int lHeld, int rHeld, int mHeld);
 
+    //	Walk toward a tapped point (engine frame coords); runs the engine's own
+    //	ActionMoveTo -- pathing, server message, walk animation included.
+    [DllImport(LIB)] static extern void   Ran_Host_TapMove(float engineX, float engineY);
+
+    //	Pinch zoom as mouse wheel (WHEEL_DELTA units, 120 per notch).
+    [DllImport(LIB)] static extern void   Ran_Host_SetWheel(int delta);
+
     const int kEventFrame = 1;
 
     IntPtr    _renderEvent;
@@ -59,6 +66,8 @@ public sealed class RanHostDriver : MonoBehaviour
     bool      _dataPresent;   // gate: booting without data null-derefs in CreatePC
     bool      _configured;    // Configure deferred until landscape is REAL
     string    _root;
+    float     _prevPinch = -1f;   // two-finger distance last frame; <0 = not pinching
+    float     _lastTapMove;       // hold-to-walk throttle (0.35s, desktop's value)
 
     void Awake()
     {
@@ -143,11 +152,28 @@ public sealed class RanHostDriver : MonoBehaviour
 
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
 
-        //	First finger = the mouse, mapped through the SAME letterbox rect
-        //	the blit uses -- a touch on the frame must land on the engine
-        //	pixel it appears over, or every button press is offset.
-        if (Input.touchCount > 0)
+        //	TWO fingers: pinch zoom, delivered as wheel delta. The mouse is
+        //	released during a pinch so the second finger landing does not
+        //	read as a click.
+        if (Input.touchCount >= 2)
         {
+            float d = Vector2.Distance(Input.GetTouch(0).position,
+                                       Input.GetTouch(1).position);
+            if (_prevPinch > 0f)
+                Ran_Host_SetWheel((int)((d - _prevPinch) * 2f));
+            _prevPinch = d;
+            Ran_SetInput(0, 0, 0, 0, 0);
+        }
+        //	ONE finger = the mouse, mapped through the SAME letterbox rect the
+        //	blit uses -- a touch must land on the engine pixel it appears over.
+        //	Holding the finger also WALKS toward it, reissued on the same
+        //	throttle the desktop walk keys use (ActionMoveTo restarts the walk;
+        //	per-frame reissue freezes the animation on its first pose).
+        else if (Input.touchCount == 1)
+        {
+            _prevPinch = -1f;
+            Ran_Host_SetWheel(0);
+
             Touch t = Input.GetTouch(0);
             Rect fit = FitRect();
             int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
@@ -155,9 +181,17 @@ public sealed class RanHostDriver : MonoBehaviour
             int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
             bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
             Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
+
+            if (held && Time.unscaledTime - _lastTapMove > 0.35f)
+            {
+                Ran_Host_TapMove(mx, my);
+                _lastTapMove = Time.unscaledTime;
+            }
         }
         else
         {
+            _prevPinch = -1f;
+            Ran_Host_SetWheel(0);
             Ran_SetInput(0, 0, 0, 0, 0);
         }
 
