@@ -187,14 +187,25 @@ public sealed class RanHostDriver : MonoBehaviour
 
             if (_prevPinch > 0f)
             {
-                int px = (int)(d - _prevPinch);
-                if (px != 0) Ran_Host_Zoom(px);
+                float dDist = d - _prevPinch;
+                Vector2 cd  = c - _prevCentroid;
 
-                //	Centroid drag rotates the camera. Unity Y is up-positive;
-                //	the engine's look expects screen-down-positive dy.
-                Vector2 cd = c - _prevCentroid;
-                if (cd.sqrMagnitude > 0.25f)
+                //	ONE GESTURE AT A TIME. Sending both every frame made a
+                //	rotate-drag trigger zoom (reported on device): two fingers
+                //	never move perfectly parallel, so a drag always leaks a
+                //	little distance change. Whichever signal dominates this
+                //	frame wins; the other is ignored.
+                if (Mathf.Abs(dDist) > cd.magnitude)
+                {
+                    int px = (int)dDist;
+                    if (px != 0) Ran_Host_Zoom(px);
+                }
+                else if (cd.sqrMagnitude > 0.25f)
+                {
+                    //	Unity Y is up-positive; the engine's look wants
+                    //	screen-down-positive dy.
                     Ran_Host_Look((int)cd.x, (int)-cd.y);
+                }
             }
             _prevPinch = d;
             _prevCentroid = c;
