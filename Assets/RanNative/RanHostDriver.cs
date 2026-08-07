@@ -82,9 +82,13 @@ public sealed class RanHostDriver : MonoBehaviour
     string    _root;
     float     _prevPinch = -1f;   // two-finger distance last frame; <0 = not pinching
     Vector2   _prevCentroid;      // two-finger centroid last frame (for look)
-    int       _stickId = -1;      // fingerId anchoring the joystick; -1 = none
-    Vector2   _stickAnchor;       // screen position where the stick finger landed
-    Vector2   _stickVec;          // current stick vector (for the on-screen hint)
+    int       _mouseId = -1;      // finger owning the mouse (left half)
+    int       _dragId = -1;       // finger owning the camera drag (right half)
+    Vector2   _dragStart;
+    float     _dragTime;
+    bool      _dragMoved;
+    Vector2   _tapQueuedPos;      // queued right-side UI click, engine coords
+    int       _tapQueuedFrames;   // 2 = held frame pending, 1 = release pending
 
     void Awake()
     {
@@ -129,13 +133,6 @@ public sealed class RanHostDriver : MonoBehaviour
         Debug.Log($"[RanHost] data root: {_root}  engine {_texW}x{_texH}  " +
                   $"screen {Screen.width}x{Screen.height}  data present: {_dataPresent}");
         _configured = true;
-    }
-
-    void ReleaseStick()
-    {
-        if (_stickId >= 0) Ran_Host_MoveStop();
-        _stickId = -1;
-        _stickVec = Vector2.zero;
     }
 
     //	The largest rect with the engine frame's aspect that fits the screen,
@@ -209,53 +206,76 @@ public sealed class RanHostDriver : MonoBehaviour
             }
             _prevPinch = d;
             _prevCentroid = c;
-            ReleaseStick();
+            _dragId = -1;
             Ran_SetInput(0, 0, 0, 0, 0);
         }
         else if (Input.touchCount == 1)
         {
             _prevPinch = -1f;
             Touch t = Input.GetTouch(0);
-
-            //	LEFT 40% of the screen = VIRTUAL JOYSTICK. Anchors where the
-            //	finger lands; direction+hold walks, camera-relative, via the
-            //	desktop-verified native path. Never sends mouse events.
             bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
-            if (_stickId == t.fingerId || (_stickId < 0 && !ended &&
-                t.phase == TouchPhase.Began && t.position.x < Screen.width * 0.4f))
+
+            //	LEFT half = the mouse: the engine's own click-to-move (now
+            //	that the pick reads the finger, tap-and-drag steers like a
+            //	joystick by itself -- user-confirmed) plus left-side UI.
+            if (_dragId != t.fingerId &&
+                (t.position.x < Screen.width * 0.5f || _mouseId == t.fingerId))
             {
-                if (ended) { ReleaseStick(); }
-                else
-                {
-                    if (_stickId < 0) { _stickId = t.fingerId; _stickAnchor = t.position; }
-                    _stickVec = t.position - _stickAnchor;
-                    if (_stickVec.magnitude > 20f)
-                    {
-                        Vector2 n = _stickVec.normalized;
-                        Ran_Host_MoveDir(n.x, n.y);   // Unity y-up == forward
-                    }
-                    else Ran_Host_MoveStop();         // inside dead zone
-                }
-                Ran_SetInput(0, 0, 0, 0, 0);
-            }
-            //	RIGHT side = the mouse: UI clicks and the engine's own
-            //	click-to-move, mapped through the blit's letterbox rect.
-            else
-            {
+                _mouseId = ended ? -1 : t.fingerId;
                 Rect fit = FitRect();
                 int mx = (int)((t.position.x - fit.x) * _texW / fit.width);
                 //	TOP-LEFT origin: the ground pick (GetMouseTargetPosWnd:1149)
                 //	flips Y itself, so it expects top-left input.
                 int my = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
-                bool held = !ended;
-                Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
+                Ran_SetInput(mx, my, ended ? 0 : 1, 0, 0);
+            }
+            //	RIGHT half: DRAG rotates the camera; a quick short tap is a
+            //	UI click (menus and the tray live bottom-right).
+            else
+            {
+                if (t.phase == TouchPhase.Began)
+                {
+                    _dragId = t.fingerId; _dragStart = t.position;
+                    _dragTime = Time.unscaledTime; _dragMoved = false;
+                }
+                if (_dragId == t.fingerId)
+                {
+                    Vector2 dp = t.deltaPosition;
+                    if ((t.position - _dragStart).magnitude > 15f) _dragMoved = true;
+                    if (_dragMoved && dp.sqrMagnitude > 0.25f)
+                        Ran_Host_Look((int)dp.x, (int)-dp.y);
+
+                    if (ended)
+                    {
+                        //	Short, still touch = a click. Queued: the engine's
+                        //	edge machine needs a held frame then a release.
+                        if (!_dragMoved && Time.unscaledTime - _dragTime < 0.3f)
+                        {
+                            Rect fit = FitRect();
+                            _tapQueuedPos = new Vector2(
+                                (t.position.x - fit.x) * _texW / fit.width,
+                                (Screen.height - t.position.y - fit.y) * _texH / fit.height);
+                            _tapQueuedFrames = 2;
+                        }
+                        _dragId = -1;
+                    }
+                }
+                if (_tapQueuedFrames <= 0) Ran_SetInput(0, 0, 0, 0, 0);
             }
         }
         else
         {
             _prevPinch = -1f;
-            ReleaseStick();
-            Ran_SetInput(0, 0, 0, 0, 0);
+            _dragId = -1;
+            if (_tapQueuedFrames <= 0) Ran_SetInput(0, 0, 0, 0, 0);
+        }
+
+        //	Deliver a queued right-side tap: one held frame, one release frame.
+        if (_tapQueuedFrames > 0)
+        {
+            --_tapQueuedFrames;
+            Ran_SetInput((int)_tapQueuedPos.x, (int)_tapQueuedPos.y,
+                         _tapQueuedFrames > 0 ? 1 : 0, 0, 0);
         }
 
         //	One engine frame, on the render thread, this frame.
@@ -293,15 +313,6 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             GUI.DrawTexture(FitRect(), _frameTex, ScaleMode.StretchToFill, false);
 
-            //	Joystick hint: anchor ring + current stick position. IMGUI
-            //	boxes are crude but zero-asset; replaced with real UI later.
-            if (_stickId >= 0)
-            {
-                Vector2 a = new Vector2(_stickAnchor.x, Screen.height - _stickAnchor.y);
-                Vector2 p = a + new Vector2(_stickVec.x, -_stickVec.y);
-                GUI.Box(new Rect(a.x - 60, a.y - 60, 120, 120), "");
-                GUI.Box(new Rect(p.x - 25, p.y - 25, 50, 50), "");
-            }
         }
         else
         {
