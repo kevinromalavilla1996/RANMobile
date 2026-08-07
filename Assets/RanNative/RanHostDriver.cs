@@ -311,7 +311,7 @@ public sealed class RanHostDriver : MonoBehaviour
                             _tapQueuedPos = new Vector2(
                                 (t.position.x - fit.x) * _texW / fit.width,
                                 (Screen.height - t.position.y - fit.y) * _texH / fit.height);
-                            _tapQueuedFrames = 2;
+                            _tapQueuedFrames = 3;
                         }
                         _dragId = -1;
                     }
