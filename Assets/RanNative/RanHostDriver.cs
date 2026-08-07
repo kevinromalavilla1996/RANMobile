@@ -192,11 +192,13 @@ public sealed class RanHostDriver : MonoBehaviour
             bool held = t.phase != TouchPhase.Ended && t.phase != TouchPhase.Canceled;
             Ran_SetInput(mx, my, held ? 1 : 0, 0, 0);
 
-            if (held && Time.unscaledTime - _lastTapMove > 0.35f)
-            {
-                Ran_Host_TapMove(mx, my);
-                _lastTapMove = Time.unscaledTime;
-            }
+            //	NO synthetic TapMove here any more. Once input actually reached
+            //	the engine (the activeInputHandler fix), its OWN click-to-move
+            //	fires on the tap -- and the 0.35s TapMove reissue then fought
+            //	it, walking left-right-left between two destinations (measured
+            //	on device). The engine's native path is the single authority:
+            //	tap ground, character walks to that exact spot, like the PC
+            //	client. Ran_Host_TapMove stays exported as a fallback.
         }
         else
         {
