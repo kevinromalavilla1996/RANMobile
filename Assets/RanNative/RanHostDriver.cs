@@ -77,6 +77,12 @@ public sealed class RanHostDriver : MonoBehaviour
     //	Two-finger camera look, drag pixel deltas.
     [DllImport(LIB)] static extern void   Ran_Host_Look(int dx, int dy);
 
+    //	Keyboard bridge: a tap is one engine-frame press of a DirectInput scan
+    //	code -- the whole desktop key surface reduces to buttons calling this
+    //	(see _Port_ARM64/docs/mobile_input_map.md). KeyHold is for modifiers.
+    [DllImport(LIB)] static extern void   Ran_Host_KeyTap(int dik);
+    [DllImport(LIB)] static extern void   Ran_Host_KeyHold(int dik, int down);
+
     const int kEventFrame = 1;
 
     IntPtr    _renderEvent;
@@ -97,6 +103,65 @@ public sealed class RanHostDriver : MonoBehaviour
     bool      _dragMoved;
     Vector2   _tapQueuedPos;      // queued right-side UI click, engine coords
     int       _tapQueuedFrames;   // 2 = held frame pending, 1 = release pending
+
+    //	On-screen key bars (skill 1-0, items QWEASD). Rects live in GUI space
+    //	(top-left origin); touches are converted at the hit test. A finger that
+    //	BEGINS on a button is owned by it -- it must never leak into the
+    //	joystick/camera/tap routing (same ownership rule as stick and drag).
+    int       _barId = -1;         // finger owning a button press
+    int       _barPressed = -1;    // which button that finger went down on
+    Rect[]    _barRects;
+    int[]     _barDiks;
+    string[]  _barLabels;
+
+    static readonly int[] kSkillDiks = { 0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B }; // DIK_1..0
+    static readonly int[] kItemDiks  = { 0x10,0x11,0x12,0x1E,0x1F,0x20 };                      // Q W E A S D
+
+    void BuildBars()
+    {
+        //	Two rows, bottom-centre, floating just above the game's own tray.
+        //	Sized off screen HEIGHT so phones of any aspect get thumbable
+        //	buttons; translucent so the world stays visible under them.
+        float s   = Screen.height * 0.072f;
+        float gap = s * 0.12f;
+        int   n   = kSkillDiks.Length + kItemDiks.Length;
+        _barRects  = new Rect[n];
+        _barDiks   = new int[n];
+        _barLabels = new string[n];
+
+        string[] skillLbl = { "1","2","3","4","5","6","7","8","9","0" };
+        string[] itemLbl  = { "Q","W","E","A","S","D" };
+
+        float rowW = kSkillDiks.Length * s + (kSkillDiks.Length - 1) * gap;
+        float x0   = (Screen.width - rowW) * 0.5f;
+        float ySkill = Screen.height - s * 2.6f;    // above the engine's tray
+        for (int i = 0; i < kSkillDiks.Length; ++i)
+        {
+            _barRects[i]  = new Rect(x0 + i * (s + gap), ySkill, s, s);
+            _barDiks[i]   = kSkillDiks[i];
+            _barLabels[i] = skillLbl[i];
+        }
+
+        float rowW2 = kItemDiks.Length * s + (kItemDiks.Length - 1) * gap;
+        float x1    = (Screen.width - rowW2) * 0.5f;
+        float yItem = ySkill - s - gap;
+        for (int i = 0; i < kItemDiks.Length; ++i)
+        {
+            int j = kSkillDiks.Length + i;
+            _barRects[j]  = new Rect(x1 + i * (s + gap), yItem, s, s);
+            _barDiks[j]   = kItemDiks[i];
+            _barLabels[j] = itemLbl[i];
+        }
+    }
+
+    int BarHit(Vector2 touchPos)
+    {
+        if (_barRects == null) return -1;
+        Vector2 gui = new Vector2(touchPos.x, Screen.height - touchPos.y);
+        for (int i = 0; i < _barRects.Length; ++i)
+            if (_barRects[i].Contains(gui)) return i;
+        return -1;
+    }
 
     void Awake()
     {
@@ -194,6 +259,7 @@ public sealed class RanHostDriver : MonoBehaviour
     {
         ConfigureOnce();
         if (!_configured) return;   // still waiting for landscape dimensions
+        if (_barRects == null) BuildBars();   // landscape is real past this point
 
         //	HARD GATE. Booting without the client data reaches CreatePC with
         //	0 maps and null-derefs (measured on device, 2026-08-07). Waiting
@@ -211,17 +277,38 @@ public sealed class RanHostDriver : MonoBehaviour
         //	into zoom" (reported) because a raw touchCount>=2 check treated
         //	the stick+drag pair as a pinch. Pinch now requires BOTH fingers
         //	to be unowned.
-        bool stickOwned = false, dragOwned = false;
+        //	BUTTONS CLAIM FIRST. A finger that lands on a bar button belongs to
+        //	it for its whole life; the tap fires on release while still inside
+        //	the same button (slide off to cancel -- standard button feel).
+        for (int i = 0; i < Input.touchCount; ++i)
+        {
+            Touch t = Input.GetTouch(i);
+            if (_barId < 0 && t.phase == TouchPhase.Began)
+            {
+                int hit = BarHit(t.position);
+                if (hit >= 0) { _barId = t.fingerId; _barPressed = hit; }
+            }
+            else if (_barId == t.fingerId &&
+                     (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled))
+            {
+                if (t.phase == TouchPhase.Ended && BarHit(t.position) == _barPressed)
+                    Ran_Host_KeyTap(_barDiks[_barPressed]);
+                _barId = -1; _barPressed = -1;
+            }
+        }
+
+        bool stickOwned = false, dragOwned = false, barOwned = false;
         for (int i = 0; i < Input.touchCount; ++i)
         {
             int id = Input.GetTouch(i).fingerId;
             if (id == _stickId) stickOwned = true;
             if (id == _dragId)  dragOwned  = true;
+            if (id == _barId)   barOwned   = true;
         }
 
         //	TWO fingers: pinch = zoom, shared drag = look ("Shift view" on PC).
         //	The mouse is released so the fingers never read as clicks.
-        if (Input.touchCount >= 2 && !stickOwned && !dragOwned)
+        if (Input.touchCount >= 2 && !stickOwned && !dragOwned && !barOwned)
         {
             Touch a = Input.GetTouch(0), b = Input.GetTouch(1);
             float   d = Vector2.Distance(a.position, b.position);
@@ -266,6 +353,9 @@ public sealed class RanHostDriver : MonoBehaviour
             {
                 Touch t = Input.GetTouch(i);
                 bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
+
+                //	A button's finger is the button's alone.
+                if (_barId == t.fingerId) continue;
 
                 //	LEFT half = VIRTUAL JOYSTICK. Anchors where the finger
                 //	lands; camera-relative walk; release issues a real stop.
@@ -373,6 +463,28 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             GUI.DrawTexture(FitRect(), _frameTex, ScaleMode.StretchToFill, false);
 
+            //	The key bars. Translucent boxes; the pressed one goes opaque.
+            //	IMGUI is not consulted for input -- Update's touch routing owns
+            //	that (finger ownership) -- these are pixels only.
+            if (_barRects != null)
+            {
+                GUIStyle style = GUI.skin.box;
+                int savedSize = style.fontSize;
+                FontStyle savedStyle = style.fontStyle;
+                style.fontSize  = (int)(_barRects[0].height * 0.42f);
+                style.fontStyle = FontStyle.Bold;
+                Color saved = GUI.color;
+                for (int i = 0; i < _barRects.Length; ++i)
+                {
+                    GUI.color = i == _barPressed
+                        ? new Color(1f, 1f, 0.6f, 0.95f)
+                        : new Color(1f, 1f, 1f, 0.45f);
+                    GUI.Box(_barRects[i], _barLabels[i], style);
+                }
+                GUI.color = saved;
+                style.fontSize  = savedSize;
+                style.fontStyle = savedStyle;
+            }
         }
         else
         {
