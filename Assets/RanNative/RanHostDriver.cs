@@ -180,9 +180,15 @@ public sealed class RanHostDriver : MonoBehaviour
         "RUN","HLP","PET","ATK","PK","SUM" };
 
     const int kMenuToggle = -2;    // BarHit's answer for the KEYS button
+    const int kRClick     = -3;    // BarHit's answer for the R button
     bool      _menuOpen;
     Rect      _menuToggleRect;
     Rect[]    _menuRects;
+
+    //	One-shot right-click arm: press R, then the NEXT tap delivers as the
+    //	desktop right mouse button (cast active skill / clear a slot).
+    Rect      _rclickRect;
+    bool      _rclickArmed;
 
     void BuildBars()
     {
@@ -220,6 +226,10 @@ public sealed class RanHostDriver : MonoBehaviour
             _barLabels[j] = itemLbl[i];
         }
 
+        //	R (right-click) button: right of the skill row, same size as the
+        //	bar buttons so the thumb that works the bars reaches it.
+        _rclickRect = new Rect(x0 + rowW + gap * 3f, ySkill, s, s);
+
         //	KEYS toggle: top-right corner, out of the compass's way. The panel
         //	folds out beneath it, two columns.
         float s2 = Screen.height * 0.058f;
@@ -242,6 +252,7 @@ public sealed class RanHostDriver : MonoBehaviour
         for (int i = 0; i < _barRects.Length; ++i)
             if (_barRects[i].Contains(gui)) return i;
         if (_menuToggleRect.Contains(gui)) return kMenuToggle;
+        if (_rclickRect.Contains(gui)) return kRClick;
         if (_menuOpen && _menuRects != null)
             for (int i = 0; i < _menuRects.Length; ++i)
                 if (_menuRects[i].Contains(gui)) return _barRects.Length + i;
@@ -434,6 +445,8 @@ public sealed class RanHostDriver : MonoBehaviour
                 {
                     if (_barPressed == kMenuToggle)
                         _menuOpen = !_menuOpen;
+                    else if (_barPressed == kRClick)
+                        _rclickArmed = !_rclickArmed;
                     else if (_barPressed >= _barRects.Length)
                         Ran_Host_KeyTap(kMenuDiks[_barPressed - _barRects.Length]);
                     else
@@ -615,6 +628,9 @@ public sealed class RanHostDriver : MonoBehaviour
                                 (t.position.x - fit.x) * _texW / fit.width,
                                 (Screen.height - t.position.y - fit.y) * _texH / fit.height);
                             _tapQueuedFrames = 4;	// hover, down, held, release
+                            //	R button armed: this tap is the desktop
+                            //	right-click (cast active skill on target).
+                            if (_rclickArmed) { _tapQueuedBtn = 1; _rclickArmed = false; }
                         }
                         _dragId = -1;
                     }
@@ -711,6 +727,15 @@ public sealed class RanHostDriver : MonoBehaviour
                         : new Color(1f, 1f, 1f, 0.45f);
                     GUI.Box(_barRects[i], _barLabels[i], style);
                 }
+
+                //	R button: solid while armed so the "next tap is a
+                //	right-click" state is visible at a glance.
+                GUI.color = _rclickArmed
+                    ? new Color(1f, 0.85f, 0.3f, 0.95f)
+                    : _barPressed == kRClick
+                    ? new Color(1f, 1f, 0.6f, 0.95f)
+                    : new Color(1f, 1f, 1f, 0.55f);
+                GUI.Box(_rclickRect, "R", style);
 
                 //	Window-shortcut panel behind the KEYS toggle.
                 int menuFont = (int)(_menuToggleRect.height * 0.38f);
