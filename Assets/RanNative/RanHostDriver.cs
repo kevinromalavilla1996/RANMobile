@@ -47,6 +47,22 @@ public sealed class RanHostDriver : MonoBehaviour
              "per user test). 0 falls back to 40 (serialized-0 trap).")]
     public int LookSensitivityPercent = 40;
 
+    [Header("Character Setup (gameemulator.exe's startup dialog)")]
+    [Tooltip("A .charset preset from Data/GLogic (class00..class4A). Empty = " +
+             "class00.charset, the emulator's default.")]
+    public string CharsetFile = "";
+    [Tooltip("Character name. Empty = the host default.")]
+    public string CharName = "";
+    [Tooltip("0 = normal, 1 = GM, 2 = admin. Matches the dialog's radios. " +
+             "NOTE: admin item tooltips show extra debug lines by design.")]
+    public int UserLevel = 0;
+    public bool MaxLevel;
+    public bool MaxStats;
+    public bool AllSkills;
+    public bool Gold1B;
+    public bool Contrib100K;
+    public bool Activity100K;
+
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
 
@@ -82,6 +98,13 @@ public sealed class RanHostDriver : MonoBehaviour
     //	(see _Port_ARM64/docs/mobile_input_map.md). KeyHold is for modifiers.
     [DllImport(LIB)] static extern void   Ran_Host_KeyTap(int dik);
     [DllImport(LIB)] static extern void   Ran_Host_KeyHold(int dik, int down);
+
+    //	The emulator startup dialog as an export; must run BEFORE the first
+    //	engine frame boots (ConfigureOnce calls it ahead of Configure).
+    [DllImport(LIB)] static extern void   Ran_Host_SetCharSetup(
+        string charsetFile, string charName, int userLevel, int bMaxLevel,
+        int bMaxStats, int bAllSkills, int b1BGold, int b100KContrib,
+        int b100KActivity);
 
     const int kEventFrame = 1;
 
@@ -234,6 +257,20 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             _texW = RenderWidth;
             _texH = RenderHeight;
+        }
+
+        //	Character setup BEFORE the boot consumes it. Empty strings keep the
+        //	emulator defaults; the inspector is the phone's CDlgCharset.
+        if (!string.IsNullOrEmpty(CharsetFile) || !string.IsNullOrEmpty(CharName) ||
+            UserLevel != 0 || MaxLevel || MaxStats || AllSkills || Gold1B ||
+            Contrib100K || Activity100K)
+        {
+            Ran_Host_SetCharSetup(CharsetFile ?? "", CharName ?? "", UserLevel,
+                                  MaxLevel ? 1 : 0, MaxStats ? 1 : 0,
+                                  AllSkills ? 1 : 0, Gold1B ? 1 : 0,
+                                  Contrib100K ? 1 : 0, Activity100K ? 1 : 0);
+            Debug.Log($"[RanHost] char setup: '{CharsetFile}' '{CharName}' " +
+                      $"lvl={UserLevel} max={MaxLevel}/{MaxStats} skills={AllSkills} gold={Gold1B}");
         }
 
         Ran_Host_Configure(_root, _texW, _texH);
