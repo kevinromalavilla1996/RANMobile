@@ -143,6 +143,15 @@ public sealed class RanHostDriver : MonoBehaviour
     //	After any release, the cursor stays put, button up, for a few frames.
     int       _releaseHoldFrames;
     Vector2   _releaseHoldPos;     // engine coords
+
+    //	RIGHT-CLICK = a quick two-finger tap (both fingers down and up fast,
+    //	no pinch/rotate movement), delivered at the two fingers' centre.
+    //	Desktop right-click casts the active skill on a target and clears a
+    //	quickbar slot; both now exist on glass.
+    float     _twoStart = -1f;     // when the two-finger state began; <0 = not live
+    bool      _twoMoved;           // any zoom/look applied = not a tap
+    Vector2   _twoCentroid;
+    int       _tapQueuedBtn;       // 0 = left, 1 = right (shared delivery queue)
     Rect[]    _barRects;
     int[]     _barDiks;
     string[]  _barLabels;
@@ -314,6 +323,25 @@ public sealed class RanHostDriver : MonoBehaviour
         Ran_SetInput(_texW / 2, _texH * 2 / 3, 0, 0, 0);
     }
 
+    //	Runs when the two-finger state ends: a short, still two-finger contact
+    //	is a RIGHT-CLICK at the centre point, queued through the shared tap
+    //	delivery (held frame, release frame, position hold).
+    void DetectTwoFingerTap()
+    {
+        if (_twoStart < 0f) return;
+        bool quick = Time.unscaledTime - _twoStart < 0.35f;
+        if (quick && !_twoMoved)
+        {
+            Rect fit = FitRect();
+            _tapQueuedPos = new Vector2(
+                (_twoCentroid.x - fit.x) * _texW / fit.width,
+                (Screen.height - _twoCentroid.y - fit.y) * _texH / fit.height);
+            _tapQueuedFrames = 3;
+            _tapQueuedBtn = 1;
+        }
+        _twoStart = -1f;
+    }
+
     //	Park -- unless a release just happened, in which case the cursor sits
     //	at the release point (button up) until the engine has surely seen it.
     void ParkOrHold()
@@ -418,6 +446,9 @@ public sealed class RanHostDriver : MonoBehaviour
             float   d = Vector2.Distance(a.position, b.position);
             Vector2 c = (a.position + b.position) * 0.5f;
 
+            if (_prevPinch < 0f) { _twoStart = Time.unscaledTime; _twoMoved = false; }
+            _twoCentroid = c;
+
             if (_prevPinch > 0f)
             {
                 float dDist = d - _prevPinch;
@@ -428,6 +459,8 @@ public sealed class RanHostDriver : MonoBehaviour
                 //	never move perfectly parallel, so a drag always leaks a
                 //	little distance change. Whichever signal dominates this
                 //	frame wins; the other is ignored.
+                if (Mathf.Abs(dDist) > 3f || cd.magnitude > 3f) _twoMoved = true;
+
                 if (Mathf.Abs(dDist) > cd.magnitude)
                 {
                     int px = (int)dDist;
@@ -447,6 +480,7 @@ public sealed class RanHostDriver : MonoBehaviour
         }
         else if (Input.touchCount >= 1)
         {
+            DetectTwoFingerTap();
             _prevPinch = -1f;
 
             //	PER-TOUCH, not per-count: joystick and camera drag must work
@@ -579,20 +613,24 @@ public sealed class RanHostDriver : MonoBehaviour
         }
         else
         {
+            DetectTwoFingerTap();
             _prevPinch = -1f;
             _dragId = -1;
             _uiDragMode = false;
             if (_tapQueuedFrames <= 0) ParkOrHold();
         }
 
-        //	Deliver a queued right-side tap: one held frame, one release frame.
+        //	Deliver a queued tap (left OR right button): held frames, release.
         if (_tapQueuedFrames > 0)
         {
             --_tapQueuedFrames;
+            int held = _tapQueuedFrames > 0 ? 1 : 0;
             Ran_SetInput((int)_tapQueuedPos.x, (int)_tapQueuedPos.y,
-                         _tapQueuedFrames > 0 ? 1 : 0, 0, 0);
+                         _tapQueuedBtn == 0 ? held : 0,
+                         _tapQueuedBtn == 1 ? held : 0, 0);
             if (_tapQueuedFrames == 0)
             {
+                _tapQueuedBtn = 0;   // queue defaults back to left clicks
                 //	Click-carry (tap skill, tap slot) needs the release to be
                 //	SEEN at the tap position too.
                 _releaseHoldFrames = 4;
