@@ -450,6 +450,11 @@ public sealed class RanHostDriver : MonoBehaviour
                     (_stickId < 0 && _dragId != t.fingerId &&
                      t.phase == TouchPhase.Began &&
                      t.position.x < Screen.width * 0.42f &&
+                     //	The game's own vertical quickbar hugs the left EDGE;
+                     //	the stick must not claim it or skills/items can never
+                     //	be clicked or dropped into the lower slots (reported:
+                     //	"doesn't let me put skill on the slot").
+                     t.position.x > Screen.height * 0.06f &&
                      t.position.y < Screen.height * 0.60f))
                 {
                     if (ended)
