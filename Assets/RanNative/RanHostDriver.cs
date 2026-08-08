@@ -70,6 +70,15 @@ public sealed class RanHostDriver : MonoBehaviour
     [Range(30, 500)] public int MoveAimUnits = 80;
     int _appliedMoveAim = -1;
 
+    //	Split render: the engine believes the screen is smaller by this
+    //	percent, so its fixed-pixel UI lays out BIGGER, while the FBO and the
+    //	3D world stay native-sharp. 200 = windows twice as tall/wide (4x
+    //	area). 100 = off. Applied at boot only -- the engine lays out its UI
+    //	once, so changing it needs an app restart.
+    [Header("UI")]
+    [Range(100, 400)] public int UiScalePercent = 100;
+    int _engW, _engH;   // the logical size the engine believes; ALL input maps here
+
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
 
@@ -97,6 +106,7 @@ public sealed class RanHostDriver : MonoBehaviour
     [DllImport(LIB)] static extern void   Ran_Host_MoveDir(float dirX, float dirY);
     [DllImport(LIB)] static extern void   Ran_Host_MoveStop();
     [DllImport(LIB)] static extern void   Ran_Host_SetMoveAim(int units);
+    [DllImport(LIB)] static extern void   Ran_Host_SetUiScale(int pct);
 
     //	Two-finger camera look, drag pixel deltas.
     [DllImport(LIB)] static extern void   Ran_Host_Look(int dx, int dy);
@@ -310,6 +320,13 @@ public sealed class RanHostDriver : MonoBehaviour
                       $"lvl={UserLevel} max={MaxLevel}/{MaxStats} skills={AllSkills} gold={Gold1B}");
         }
 
+        //	Split render: engine believes a smaller screen; SAME integer math
+        //	as the plugin so input coordinates agree exactly.
+        int uiPct = Mathf.Clamp(UiScalePercent, 100, 400);
+        Ran_Host_SetUiScale(uiPct);
+        _engW = _texW * 100 / uiPct;
+        _engH = _texH * 100 / uiPct;
+
         Ran_Host_Configure(_root, _texW, _texH);
         _renderEvent = Ran_Host_GetRenderEventFunc();
 
@@ -339,7 +356,7 @@ public sealed class RanHostDriver : MonoBehaviour
     //	handling). Neutral = lower-centre of the frame, over open ground.
     void ReleaseMouse()
     {
-        Ran_SetInput(_texW / 2, _texH * 2 / 3, 0, 0, 0);
+        Ran_SetInput(_engW / 2, _engH * 2 / 3, 0, 0, 0);
     }
 
     //	Runs when the two-finger state ends: a short, still two-finger contact
@@ -353,8 +370,8 @@ public sealed class RanHostDriver : MonoBehaviour
         {
             Rect fit = FitRect();
             _tapQueuedPos = new Vector2(
-                (_twoCentroid.x - fit.x) * _texW / fit.width,
-                (Screen.height - _twoCentroid.y - fit.y) * _texH / fit.height);
+                (_twoCentroid.x - fit.x) * _engW / fit.width,
+                (Screen.height - _twoCentroid.y - fit.y) * _engH / fit.height);
             _tapQueuedFrames = 4;	// hover, down, held, release
             _tapQueuedBtn = 1;
         }
@@ -578,8 +595,8 @@ public sealed class RanHostDriver : MonoBehaviour
                     {
                         //	The finger IS the mouse, button held, every frame.
                         Rect fit = FitRect();
-                        int ex = (int)((t.position.x - fit.x) * _texW / fit.width);
-                        int ey = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
+                        int ex = (int)((t.position.x - fit.x) * _engW / fit.width);
+                        int ey = (int)((Screen.height - t.position.y - fit.y) * _engH / fit.height);
                         Ran_SetInput(ex, ey, ended ? 0 : 1, 0, 0);
                         if (ended)
                         {
@@ -599,8 +616,8 @@ public sealed class RanHostDriver : MonoBehaviour
                     {
                         Rect fitH = FitRect();
                         Ran_SetInput(
-                            (int)((t.position.x - fitH.x) * _texW / fitH.width),
-                            (int)((Screen.height - t.position.y - fitH.y) * _texH / fitH.height),
+                            (int)((t.position.x - fitH.x) * _engW / fitH.width),
+                            (int)((Screen.height - t.position.y - fitH.y) * _engH / fitH.height),
                             0, 0, 0);
                     }
 
@@ -625,8 +642,8 @@ public sealed class RanHostDriver : MonoBehaviour
                         {
                             Rect fit = FitRect();
                             _tapQueuedPos = new Vector2(
-                                (t.position.x - fit.x) * _texW / fit.width,
-                                (Screen.height - t.position.y - fit.y) * _texH / fit.height);
+                                (t.position.x - fit.x) * _engW / fit.width,
+                                (Screen.height - t.position.y - fit.y) * _engH / fit.height);
                             _tapQueuedFrames = 4;	// hover, down, held, release
                             //	R button armed: this tap is the desktop
                             //	right-click (cast active skill on target).
