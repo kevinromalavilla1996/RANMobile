@@ -63,6 +63,13 @@ public sealed class RanHostDriver : MonoBehaviour
     public bool Contrib100K;
     public bool Activity100K;
 
+    //	World units ahead of the player a joystick/tap move targets. Native
+    //	clamps to [30, 500]; below ~30 the character reaches the target before
+    //	the next reissue and stutter-stops. Live-tunable in the editor.
+    [Header("Movement")]
+    [Range(30, 500)] public int MoveAimUnits = 80;
+    int _appliedMoveAim = -1;
+
 #if UNITY_ANDROID && !UNITY_EDITOR
     const string LIB = "ranclient";
 
@@ -89,6 +96,7 @@ public sealed class RanHostDriver : MonoBehaviour
     //	reissue rule.
     [DllImport(LIB)] static extern void   Ran_Host_MoveDir(float dirX, float dirY);
     [DllImport(LIB)] static extern void   Ran_Host_MoveStop();
+    [DllImport(LIB)] static extern void   Ran_Host_SetMoveAim(int units);
 
     //	Two-finger camera look, drag pixel deltas.
     [DllImport(LIB)] static extern void   Ran_Host_Look(int dx, int dy);
@@ -382,6 +390,12 @@ public sealed class RanHostDriver : MonoBehaviour
         ConfigureOnce();
         if (!_configured) return;   // still waiting for landscape dimensions
         if (_barRects == null) BuildBars();   // landscape is real past this point
+
+        if (MoveAimUnits != _appliedMoveAim)
+        {
+            Ran_Host_SetMoveAim(MoveAimUnits);
+            _appliedMoveAim = MoveAimUnits;
+        }
 
         //	HARD GATE. Booting without the client data reaches CreatePC with
         //	0 maps and null-derefs (measured on device, 2026-08-07). Waiting
