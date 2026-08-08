@@ -457,12 +457,6 @@ public sealed class RanHostDriver : MonoBehaviour
                         int ex = (int)((t.position.x - fit.x) * _texW / fit.width);
                         int ey = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
                         Ran_SetInput(ex, ey, ended ? 0 : 1, 0, 0);
-                        //	WRITER TRACE (drag-bounce hunt): tag + touch census.
-                        //	The engine-side stream alternates between two moving
-                        //	clusters; this names which C# writer produces each.
-                        if (Time.frameCount % 6 == 0 || ended)
-                            Debug.Log($"[writer] uiDrag id={t.fingerId} {ex},{ey} " +
-                                      $"ended={ended} touches={Input.touchCount}");
                         if (ended) { _uiDragMode = false; _dragId = -1; }
                         continue;
                     }
@@ -529,8 +523,6 @@ public sealed class RanHostDriver : MonoBehaviour
             --_tapQueuedFrames;
             Ran_SetInput((int)_tapQueuedPos.x, (int)_tapQueuedPos.y,
                          _tapQueuedFrames > 0 ? 1 : 0, 0, 0);
-            Debug.Log($"[writer] tapQueue {_tapQueuedPos.x:F0},{_tapQueuedPos.y:F0} " +
-                      $"framesLeft={_tapQueuedFrames}");
         }
 
         //	One engine frame, on the render thread, this frame.
