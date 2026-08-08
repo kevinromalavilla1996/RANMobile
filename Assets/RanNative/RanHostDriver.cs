@@ -336,7 +336,7 @@ public sealed class RanHostDriver : MonoBehaviour
             _tapQueuedPos = new Vector2(
                 (_twoCentroid.x - fit.x) * _texW / fit.width,
                 (Screen.height - _twoCentroid.y - fit.y) * _texH / fit.height);
-            _tapQueuedFrames = 3;
+            _tapQueuedFrames = 4;	// hover, down, held, release
             _tapQueuedBtn = 1;
         }
         _twoStart = -1f;
@@ -600,7 +600,7 @@ public sealed class RanHostDriver : MonoBehaviour
                             _tapQueuedPos = new Vector2(
                                 (t.position.x - fit.x) * _texW / fit.width,
                                 (Screen.height - t.position.y - fit.y) * _texH / fit.height);
-                            _tapQueuedFrames = 3;
+                            _tapQueuedFrames = 4;	// hover, down, held, release
                         }
                         _dragId = -1;
                     }
@@ -620,11 +620,17 @@ public sealed class RanHostDriver : MonoBehaviour
             if (_tapQueuedFrames <= 0) ParkOrHold();
         }
 
-        //	Deliver a queued tap (left OR right button): held frames, release.
+        //	Deliver a queued tap (left OR right button). Four frames:
+        //	HOVER first, then down, held, release. The hover frame is what
+        //	makes taps TARGET mobs: the engine's entity-under-cursor tracking
+        //	runs a frame behind the cursor, so a click landing in the same
+        //	frame as the teleport was judged against the PARK position (open
+        //	ground) and became a walk instead of a target-click. Same law as
+        //	the window-drag gap latch: the mouse must ARRIVE before it acts.
         if (_tapQueuedFrames > 0)
         {
             --_tapQueuedFrames;
-            int held = _tapQueuedFrames > 0 ? 1 : 0;
+            int held = (_tapQueuedFrames > 0 && _tapQueuedFrames < 3) ? 1 : 0;
             Ran_SetInput((int)_tapQueuedPos.x, (int)_tapQueuedPos.y,
                          _tapQueuedBtn == 0 ? held : 0,
                          _tapQueuedBtn == 1 ? held : 0, 0);
