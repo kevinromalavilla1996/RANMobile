@@ -467,6 +467,20 @@ public sealed class RanHostDriver : MonoBehaviour
                         continue;
                     }
 
+                    //	HOVER AT THE FINGER while the touch is down (button up).
+                    //	The engine's window-drag latches its grab offset against
+                    //	the LAST mouse position it saw -- and the per-frame park
+                    //	used to win that race, latching gap=(-922,358) instead
+                    //	of (102,10) (probe-measured): the window teleported off
+                    //	the right edge and the boundary clamp pinned it there.
+                    {
+                        Rect fitH = FitRect();
+                        Ran_SetInput(
+                            (int)((t.position.x - fitH.x) * _texW / fitH.width),
+                            (int)((Screen.height - t.position.y - fitH.y) * _texH / fitH.height),
+                            0, 0, 0);
+                    }
+
                     Vector2 dp = t.deltaPosition;
                     if ((t.position - _dragStart).magnitude > 15f) _dragMoved = true;
                     if (_dragMoved && dp.sqrMagnitude > 0.25f)
@@ -496,7 +510,10 @@ public sealed class RanHostDriver : MonoBehaviour
                     }
                 }
             }
-            if (_tapQueuedFrames <= 0 && !_uiDragMode) ReleaseMouse();
+            //	NEVER park while a right-half finger is down: the park was
+            //	overwriting the hover every frame (last write wins), which is
+            //	exactly how the drag latched its offset against the park.
+            if (_tapQueuedFrames <= 0 && !_uiDragMode && _dragId < 0) ReleaseMouse();
         }
         else
         {
