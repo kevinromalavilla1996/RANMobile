@@ -134,6 +134,15 @@ public sealed class RanHostDriver : MonoBehaviour
     int       _barId = -1;         // finger owning a button press
     int       _barPressed = -1;    // which button that finger went down on
     bool      _uiDragMode;         // long-press: finger IS the held mouse (drag & drop)
+
+    //	Release-position hold. The engine consumes the mailbox one frame
+    //	behind; parking right after a release let the park OVERWRITE the
+    //	up-position before the engine read it -- the UP edge then landed at
+    //	the park, so drops (skill -> quickbar slot) missed their target
+    //	("L UP at 1196,720" in every drag log = the park, not the finger).
+    //	After any release, the cursor stays put, button up, for a few frames.
+    int       _releaseHoldFrames;
+    Vector2   _releaseHoldPos;     // engine coords
     Rect[]    _barRects;
     int[]     _barDiks;
     string[]  _barLabels;
@@ -303,6 +312,18 @@ public sealed class RanHostDriver : MonoBehaviour
     void ReleaseMouse()
     {
         Ran_SetInput(_texW / 2, _texH * 2 / 3, 0, 0, 0);
+    }
+
+    //	Park -- unless a release just happened, in which case the cursor sits
+    //	at the release point (button up) until the engine has surely seen it.
+    void ParkOrHold()
+    {
+        if (_releaseHoldFrames > 0)
+        {
+            --_releaseHoldFrames;
+            Ran_SetInput((int)_releaseHoldPos.x, (int)_releaseHoldPos.y, 0, 0, 0);
+        }
+        else ReleaseMouse();
     }
 
     //	The largest rect with the engine frame's aspect that fits the screen,
@@ -499,7 +520,12 @@ public sealed class RanHostDriver : MonoBehaviour
                         int ex = (int)((t.position.x - fit.x) * _texW / fit.width);
                         int ey = (int)((Screen.height - t.position.y - fit.y) * _texH / fit.height);
                         Ran_SetInput(ex, ey, ended ? 0 : 1, 0, 0);
-                        if (ended) { _uiDragMode = false; _dragId = -1; }
+                        if (ended)
+                        {
+                            _uiDragMode = false; _dragId = -1;
+                            _releaseHoldFrames = 4;
+                            _releaseHoldPos = new Vector2(ex, ey);
+                        }
                         continue;
                     }
 
@@ -549,14 +575,14 @@ public sealed class RanHostDriver : MonoBehaviour
             //	NEVER park while a right-half finger is down: the park was
             //	overwriting the hover every frame (last write wins), which is
             //	exactly how the drag latched its offset against the park.
-            if (_tapQueuedFrames <= 0 && !_uiDragMode && _dragId < 0) ReleaseMouse();
+            if (_tapQueuedFrames <= 0 && !_uiDragMode && _dragId < 0) ParkOrHold();
         }
         else
         {
             _prevPinch = -1f;
             _dragId = -1;
             _uiDragMode = false;
-            if (_tapQueuedFrames <= 0) ReleaseMouse();
+            if (_tapQueuedFrames <= 0) ParkOrHold();
         }
 
         //	Deliver a queued right-side tap: one held frame, one release frame.
@@ -565,6 +591,13 @@ public sealed class RanHostDriver : MonoBehaviour
             --_tapQueuedFrames;
             Ran_SetInput((int)_tapQueuedPos.x, (int)_tapQueuedPos.y,
                          _tapQueuedFrames > 0 ? 1 : 0, 0, 0);
+            if (_tapQueuedFrames == 0)
+            {
+                //	Click-carry (tap skill, tap slot) needs the release to be
+                //	SEEN at the tap position too.
+                _releaseHoldFrames = 4;
+                _releaseHoldPos = _tapQueuedPos;
+            }
         }
 
         //	One engine frame, on the render thread, this frame.
