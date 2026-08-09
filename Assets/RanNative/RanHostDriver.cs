@@ -70,6 +70,13 @@ public sealed class RanHostDriver : MonoBehaviour
     [Range(30, 500)] public int MoveAimUnits = 80;
     int _appliedMoveAim = -1;
 
+    //	Soft keyboard state. The ENGINE decides when an edit box is open
+    //	(Ran_Host_TextActive); this just mirrors that into Android's keyboard
+    //	and streams the composed text through the per-character text door.
+    TouchScreenKeyboard _kb;
+    string _kbSent = "";
+    bool _kbWasActive;
+
     //	Split render: the engine believes the screen is smaller by this
     //	percent, so its fixed-pixel UI lays out BIGGER, while the FBO and the
     //	3D world stay native-sharp. 200 = windows twice as tall/wide (4x
@@ -116,6 +123,12 @@ public sealed class RanHostDriver : MonoBehaviour
     //	(see _Port_ARM64/docs/mobile_input_map.md). KeyHold is for modifiers.
     [DllImport(LIB)] static extern void   Ran_Host_KeyTap(int dik);
     [DllImport(LIB)] static extern void   Ran_Host_KeyHold(int dik, int down);
+
+    //	Text bridge: characters into the engine's edit boxes ('\b' backspace,
+    //	'\r' submit), and the flag the ENGINE sets while an edit box is open --
+    //	the soft keyboard shows exactly when the game is listening.
+    [DllImport(LIB)] static extern void   Ran_Host_TextChar(uint ch);
+    [DllImport(LIB)] static extern int    Ran_Host_TextActive();
 
     //	The emulator startup dialog as an export; must run BEFORE the first
     //	engine frame boots (ConfigureOnce calls it ahead of Configure).
@@ -184,10 +197,11 @@ public sealed class RanHostDriver : MonoBehaviour
     static readonly int[] kMenuDiks = {
         0x17 /*I*/, 0x2E /*C*/, 0x25 /*K*/, 0x19 /*P*/, 0x14 /*T*/, 0x22 /*G*/,
         0x21 /*F*/, 0x32 /*M*/, 0x30 /*B*/, 0x13 /*R*/, 0x23 /*H*/, 0x26 /*L*/,
-        0x2D /*X*/, 0x2C /*Z*/, 0x16 /*U*/, 0x24 /*J*/, 0x18 /*O*/ };
+        0x2D /*X*/, 0x2C /*Z*/, 0x16 /*U*/, 0x24 /*J*/, 0x18 /*O*/,
+        0x1C /*Return -- opens the chat box; the soft keyboard follows via Ran_Host_TextActive*/ };
     static readonly string[] kMenuLabels = {
         "INV","CHR","SKL","PTY","QST","CLB","FRD","MAP","MCR","BNK","SHP",
-        "RUN","HLP","PET","ATK","PK","SUM" };
+        "RUN","HLP","PET","ATK","PK","SUM","CHAT" };
 
     const int kMenuToggle = -2;    // BarHit's answer for the KEYS button
     const int kRClick     = -3;    // BarHit's answer for the R button
@@ -413,6 +427,60 @@ public sealed class RanHostDriver : MonoBehaviour
         catch { _dataPresent = false; }
     }
 
+    //	Mirrors the engine's edit-box state into the Android soft keyboard.
+    //	Open when the game starts listening, stream text edits as characters
+    //	('\b' erases back to the common prefix, then the new tail is typed),
+    //	'\r' on submit. Only Latin-1 reaches the engine -- its text door
+    //	rejects everything else, so the diff runs on the FILTERED string to
+    //	keep both sides consistent when mixed input is typed.
+    void DriveSoftKeyboard()
+    {
+        bool active = Ran_Host_TextActive() != 0;
+
+        if (active && !_kbWasActive)
+        {
+            _kb = TouchScreenKeyboard.Open("", TouchScreenKeyboardType.Default,
+                                           false, false, false, false);
+            _kbSent = "";
+        }
+        else if (!active && _kbWasActive)
+        {
+            if (_kb != null) { _kb.active = false; _kb = null; }
+            _kbSent = "";
+        }
+        _kbWasActive = active;
+
+        if (!active || _kb == null) return;
+
+        string raw = _kb.text ?? "";
+        var sb = new System.Text.StringBuilder(raw.Length);
+        for (int i = 0; i < raw.Length; ++i)
+            if (raw[i] >= 32 && raw[i] < 256) sb.Append(raw[i]);
+        string now = sb.ToString();
+
+        if (now != _kbSent)
+        {
+            int max = Mathf.Min(now.Length, _kbSent.Length);
+            int common = 0;
+            while (common < max && now[common] == _kbSent[common]) common++;
+            for (int i = _kbSent.Length; i > common; --i) Ran_Host_TextChar('\b');
+            for (int i = common; i < now.Length; ++i)      Ran_Host_TextChar(now[i]);
+            _kbSent = now;
+        }
+
+        if (_kb.status == TouchScreenKeyboard.Status.Done)
+        {
+            Ran_Host_TextChar('\r');   // submit; the engine closes the box and TextActive drops
+            _kb = null;
+            _kbSent = "";
+        }
+        else if (_kb.status == TouchScreenKeyboard.Status.Canceled)
+        {
+            _kb = null;                // box stays open in-game; reopening the keyboard = tap chat again
+            _kbSent = "";
+        }
+    }
+
     void Update()
     {
         ConfigureOnce();
@@ -435,6 +503,8 @@ public sealed class RanHostDriver : MonoBehaviour
         }
 
         Ran_Host_SetDelta(Time.unscaledDeltaTime);
+
+        DriveSoftKeyboard();
 
         //	FINGER OWNERSHIP FIRST. The joystick finger stays the joystick and
         //	a second finger stays the camera drag -- "moving plus drag turned
