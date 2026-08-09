@@ -470,7 +470,12 @@ public sealed class RanHostDriver : MonoBehaviour
 
         if (_kb.status == TouchScreenKeyboard.Status.Done)
         {
-            Ran_Host_TextChar('\r');   // submit; the engine closes the box and TextActive drops
+            //	Submit = what a physical Enter does. The chat box listens for
+            //	the RETURN KEY to send (the text door's '\r' flag alone only
+            //	feeds CheckEnterKeyDown, which this box does not poll --
+            //	measured on device: text stayed until CHAT was tapped again).
+            Ran_Host_TextChar('\r');
+            Ran_Host_KeyTap(0x1C);     // DIK_RETURN
             _kb = null;
             _kbSent = "";
         }
